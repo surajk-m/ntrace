@@ -9,79 +9,142 @@ use std::time::Duration;
     name = "ntrace",
     version = "0.1.0",
     about = "Network port scanner and protocol analyzer",
-    long_about = "ntrace is a fast and secure tool for scanning TCP/UDP ports and analyzing network protocols."
+    long_about = "ntrace is a tool for scanning TCP/UDP ports and analyzing network protocols.",
+    next_line_help = true,
+    after_help = "EXAMPLES:
+    ntrace -H 192.168.1.1
+    ntrace -H wikipedia.org -p 1-1000
+    ntrace -H 10.0.0.1 -p 80,443,8080
+    ntrace -H 192.168.1.1 -p common --fast
+    ntrace -H 192.168.1.1 -p well-known -v
+    ntrace -H wikipedia.org -o results.json"
 )]
+
 pub struct Cli {
     #[arg(
         short = 'H',
         long,
-        help = "Target IP address, hostname, or web domain (e.g., 192.168.1.1,  wikipedia.org)"
+        help = "Target IP address, hostname, or web domain (e.g., 192.168.1.1, wikipedia.org)",
+        group = "ip_version",
+        help_heading = "TARGET SPECIFICATION"
     )]
     pub host: String,
 
-    #[arg(long, help = "Force IPv6 scanning")]
+    #[arg(
+        long,
+        help = "Force IPv6 scanning",
+        group = "ip_version",
+        help_heading = "TARGET SPECIFICATION"
+    )]
     pub ipv6: bool,
 
-    #[arg(long, help = "Force IPv4 scanning")]
+    #[arg(
+        long,
+        help = "Force IPv4 scanning",
+        group = "ip_version",
+        help_heading = "TARGET SPECIFICATION"
+    )]
     pub ipv4: bool,
 
     #[arg(
         short,
         long,
         default_value = "1-1000",
-        help = "Port range to scan (e.g., 1-1000, 80,443, or common)"
+        help = "Port range to scan (e.g., 1-1000, 80,443, or predefined groups)",
+        long_help = "Port range to scan. Can be individual ports (80,443), ranges (1-1000), or predefined groups:\n  \
+                    common: Most common ports\n  \
+                    well-known: Standard ports (1-1023)\n  \
+                    registered: Registered ports (1024-49151)\n  \
+                    dynamic: Dynamic ports (49152-65535)\n  \
+                    all: All ports (1-65535)",
+        help_heading = "PORT SPECIFICATION"
     )]
     pub ports: String,
-
-    #[arg(
-        long,
-        default_value_t = 2.0,
-        help = "Timeout for each port scan in seconds"
-    )]
-    pub timeout: f32,
-
-    #[arg(long, default_value_t = 100, help = "Batch size for parallel scanning")]
-    pub batch_size: usize,
 
     #[arg(
         short = 'P',
         long,
         default_value = "tcp",
-        help = "Protocol to scan (tcp, udp)"
+        help = "Protocol to scan (tcp, udp)",
+        help_heading = "SCAN TECHNIQUES"
     )]
     pub protocol: String,
-
-    #[arg(short, long, help = "Output file path (.json or .csv)")]
-    pub output: Option<String>,
 
     #[arg(
         short,
         long,
         help = "Perform service detection",
-        default_value_t = true
+        default_value_t = true,
+        help_heading = "SCAN TECHNIQUES"
     )]
     pub service_detection: bool,
 
-    #[arg(short = 'v', long, help = "Verbose output (show closed ports)")]
-    pub verbose: bool,
+    #[arg(
+        long,
+        help = "Aggressive scan (more intrusive probes)",
+        help_heading = "SCAN TECHNIQUES"
+    )]
+    pub aggressive: bool,
+
+    #[arg(
+        long,
+        default_value_t = 2.0,
+        help = "Timeout for each port scan in seconds",
+        help_heading = "SCAN PERFORMANCE"
+    )]
+    pub timeout: f32,
+
+    #[arg(
+        long,
+        default_value_t = 100,
+        help = "Batch size for parallel scanning",
+        help_heading = "SCAN PERFORMANCE"
+    )]
+    pub batch_size: usize,
 
     #[arg(
         long,
         help = "Rate limit in packets per second",
-        default_value_t = 1000
+        default_value_t = 1000,
+        help_heading = "SCAN PERFORMANCE"
     )]
     pub rate_limit: usize,
 
-    #[arg(long, help = "Skip host discovery (ping)")]
-    pub skip_discovery: bool,
-
-    #[arg(long, help = "Aggressive scan (more intrusive probes)")]
-    pub aggressive: bool,
-
-    #[arg(long, help = "Fast scan with shorter timeouts (less accurate)")]
+    #[arg(
+        long,
+        help = "Fast scan with shorter timeouts (less accurate)",
+        help_heading = "SCAN PERFORMANCE"
+    )]
     pub fast: bool,
 
-    #[arg(long, help = "Skip problematic ports that often cause hangs")]
+    #[arg(
+        long,
+        help = "Skip host discovery (ping)",
+        help_heading = "HOST DISCOVERY"
+    )]
+    pub skip_discovery: bool,
+
+    #[arg(
+        short,
+        long,
+        help = "Output file path (.json or .csv)",
+        help_heading = "OUTPUT OPTIONS"
+    )]
+    pub output: Option<String>,
+
+    #[arg(
+        short = 'v',
+        long,
+        help = "Verbose output (show closed ports)",
+        help_heading = "OUTPUT OPTIONS"
+    )]
+    pub verbose: bool,
+
+    #[arg(
+        long,
+        help = "Skip problematic ports that often cause hangs",
+        help_heading = "MISC OPTIONS"
+    )]
     pub skip_problematic: bool,
 }
 
