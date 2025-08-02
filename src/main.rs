@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap_builder::Parser;
 use env_logger::Env;
-use indicatif::{ProgressBar, ProgressStyle};
 use log::{info, warn};
 use ntrace::cli::Cli;
 use ntrace::output::ScanResult;
@@ -45,15 +44,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Create progress bar
-    let pb = ProgressBar::new(config.ports.len() as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ports ({eta})")
-            .unwrap()
-            .progress_chars("#>-")
-    );
-
     // Start the scan
     let start_time = Instant::now();
     let target_display = match &config.target {
@@ -74,12 +64,6 @@ async fn main() -> Result<()> {
     // Run the scan
     let results = scanner.scan().await?;
     let scan_duration = start_time.elapsed();
-
-    // Finish progress bar
-    pb.finish_with_message(format!(
-        "Scan completed in {:.2}s",
-        scan_duration.as_secs_f64()
-    ));
 
     // Create and display results
     let scan_result = ScanResult::new(target_display, results, Some(scan_duration));

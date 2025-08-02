@@ -206,6 +206,16 @@ impl Scanner {
 
         // We'll use the total number of ports for the progress bar
 
+        // First scan common ports (like nmap does) for faster results
+        let (common_ports, other_ports): (Vec<_>, Vec<_>) = self
+            .config
+            .ports
+            .iter()
+            .partition(|&&p| matches!(p, 21 | 22 | 23 | 25 | 80 | 443 | 554 | 1723));
+
+        // Combine ports with common ones first
+        let all_ports = [&common_ports[..], &other_ports[..]].concat();
+
         // Create progress bar if not in a test environment
         let progress_bar = if cfg!(not(test)) {
             use indicatif::{ProgressBar, ProgressStyle};
@@ -214,17 +224,23 @@ impl Scanner {
             pb.set_style(ProgressStyle::default_bar()
                 .template("[{elapsed_precise}] [{spinner:.green}] [{bar:40.cyan/blue}] {pos}/{len} ports ({percent}%) {msg}")
                 .unwrap()
-                .progress_chars("##-")
+                .progress_chars("█▓▒░ ")
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]));
 
             // Reset the progress bar to ensure consistent counting
             pb.reset();
+
             // Enable steady tick for continuous updates even when no progress is made
-            if self.config.fail_fast || self.config.timeout < Duration::from_millis(100) {
+            // Use fast tick rate for smaller port ranges to make the progress bar more responsive
+            if all_ports.len() <= 1000 {
+                // For small port ranges, use fast tick rate for more responsive updates
+                pb.enable_steady_tick(std::time::Duration::from_millis(5));
+            } else if self.config.fail_fast || self.config.timeout < Duration::from_millis(100) {
                 pb.enable_steady_tick(std::time::Duration::from_millis(50));
             } else {
                 pb.enable_steady_tick(std::time::Duration::from_millis(100));
             }
+
             pb.set_message("Scanning...".to_string());
             Some(Arc::new(pb))
         } else {
@@ -247,40 +263,49 @@ impl Scanner {
             (5060, 5061),
         ];
 
-        // First scan common ports (like nmap does) for faster results
-        let (common_ports, other_ports): (Vec<_>, Vec<_>) = self
-            .config
-            .ports
-            .iter()
-            .partition(|&&p| matches!(p, 21 | 22 | 23 | 25 | 80 | 443 | 554 | 1723));
-
-        // Combine ports with common ones first
-        let all_ports = [&common_ports[..], &other_ports[..]].concat();
-
         // For very large port ranges, use batching to avoid memory issues
-        let batch_size =
-            if self.config.fail_fast || self.config.timeout < Duration::from_millis(100) {
-                // Fast mode
-                if all_ports.len() > 20000 {
-                    2000
-                } else if all_ports.len() > 5000 {
-                    1000
-                } else {
-                    // For smaller scans in fast mode, process more at once
-                    all_ports.len().min(2000)
-                }
-            } else if all_ports.len() > 20000 {
-                1000
-            } else if all_ports.len() > 10000 {
-                1000
+        let batch_size = if self.config.ports.len() <= 200 {
+            // For very small port ranges (<=200), use moderate batch size to balance speed and accuracy
+            // Using smaller batches helps ensure we don't miss open ports
+            50.min(all_ports.len())
+        } else if self.config.fail_fast || self.config.timeout < Duration::from_millis(100) {
+            // Fast mode
+            if all_ports.len() > 20000 {
+                2000
             } else if all_ports.len() > 5000 {
-                800
+                1000
             } else if all_ports.len() > 1000 {
                 500
+            } else if all_ports.len() > 100 {
+                50
             } else {
-                // For very small scans, process all at once
-                all_ports.len()
-            };
+                // For very small scans, use small batches for better progress visualization
+                // This ensures the progress bar updates visibly during scanning
+                if all_ports.len() <= 100 {
+                    1 // Process one port at a time for very small ranges
+                } else {
+                    3.max(all_ports.len() / 50)
+                }
+            }
+        } else if all_ports.len() > 20000 {
+            1000
+        } else if all_ports.len() > 10000 {
+            1000
+        } else if all_ports.len() > 5000 {
+            800
+        } else if all_ports.len() > 1000 {
+            250
+        } else if all_ports.len() > 100 {
+            50
+        } else {
+            // For very small scans, use small batches for better progress visualization
+            if all_ports.len() <= 100 {
+                // Process one port at a time for very small ranges
+                1
+            } else {
+                3.max(all_ports.len() / 50)
+            }
+        };
 
         let mut results: Vec<PortResult> = Vec::with_capacity(all_ports.len());
 
@@ -323,8 +348,15 @@ impl Scanner {
                     continue;
                 }
 
-                // Always scan all IPs for small port ranges (<100 ports)
-                let scan_ips = if self.config.ports.len() < 100 {
+                // Optimize IP scanning based on port range size
+                let scan_ips = if self.config.ports.len() <= 200 {
+                    // For small port ranges, only scan the first IP for speed
+                    if !target_ips.is_empty() {
+                        vec![target_ips[0]]
+                    } else {
+                        vec![]
+                    }
+                } else if self.config.ports.len() < 100 {
                     // For small port ranges, always scan all IPs
                     target_ips.clone()
                 } else if (self.config.fail_fast
@@ -350,8 +382,19 @@ impl Scanner {
                     config.target = Target::Ip(ip);
                     let analyzer = self.analyzer.clone();
 
-                    // Use appropriate timeouts based on scan mode
-                    let timeout = if self.config.fail_fast
+                    // Use appropriate timeouts based on scan mode and port range size
+                    let timeout = if self.config.ports.len() <= 200 {
+                        // For very small port ranges, use short timeouts but not too short
+                        // We need to balance speed with accuracy to avoid missing open ports
+                        if port == 80 || port == 443 {
+                            // Special handling for common web ports that might need more time
+                            Duration::from_millis(50)
+                        } else if is_problematic {
+                            Duration::from_millis(20)
+                        } else {
+                            Duration::from_millis(15)
+                        }
+                    } else if self.config.fail_fast
                         || self.config.timeout < Duration::from_millis(100)
                     {
                         // Fast mode - use very short timeouts
@@ -484,6 +527,18 @@ impl Scanner {
                 // Update progress bar once per port (not per IP)
                 if let Some(pb) = &progress_bar {
                     pb.inc(1);
+
+                    // For smaller port ranges, force a redraw on every port for smoother visual updates
+                    if all_ports.len() <= 1000 {
+                        // Force a redraw to make progress more visible
+                        pb.tick();
+
+                        // For small ranges, add a tiny sleep every few ports to make progress more visible
+                        // This is a balance between speed and visual feedback
+                        if all_ports.len() <= 200 && results.len() % 10 == 0 {
+                            std::thread::sleep(std::time::Duration::from_micros(500));
+                        }
+                    }
                 }
             }
 
@@ -501,7 +556,15 @@ impl Scanner {
                 }
 
                 // Use shorter delay in all modes
-                if self.config.fail_fast || self.config.timeout < Duration::from_millis(100) {
+                if all_ports.len() <= 200 {
+                    // For very small port ranges, skip delays entirely to maximize speed
+                    // Just yield to allow other tasks to run
+                    tokio::task::yield_now().await;
+                } else if all_ports.len() <= 1000 {
+                    // For smaller port ranges, use minimal delay
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                } else if self.config.fail_fast || self.config.timeout < Duration::from_millis(100)
+                {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 } else {
                     // Reduced from 50ms to 20ms
