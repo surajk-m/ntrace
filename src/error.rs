@@ -27,6 +27,9 @@ pub enum NtraceError {
     #[error("DNS resolution failed: {0}")]
     DnsResolutionFailed(String),
 
+    #[error("DNS error: {0}")]
+    DnsError(String),
+
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
 

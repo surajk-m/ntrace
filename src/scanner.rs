@@ -1,5 +1,5 @@
 use crate::error::NtraceError;
-use crate::protocol::{Protocol, ProtocolAnalyzer};
+use crate::protocol::{Protocol, ProtocolAnalyzer, Target};
 use crate::services::get_service_name;
 use log::{debug, info};
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// Configuration for the scanner.
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
-    pub host: IpAddr,
+    pub target: Target,
     pub ports: Vec<u16>,
     pub timeout: Duration,
     pub protocol: Protocol,
@@ -30,6 +30,7 @@ pub struct PortResult {
     pub protocol_info: Option<String>,
     pub latency: Option<Duration>,
     pub scan_time: chrono::DateTime<chrono::Utc>,
+    pub resolved_ip: Option<String>,
 }
 
 /// Scanner for performing network port scans.
@@ -135,27 +136,74 @@ impl Scanner {
             stats.error_map.clear();
         }
 
+        let target_display = match &self.config.target {
+            Target::Ip(ip) => ip.to_string(),
+            Target::Domain(domain) => domain.clone(),
+        };
+
         info!(
             "Starting scan of {} ports on {}",
             self.config.ports.len(),
-            self.config.host
+            target_display
         );
+
+        // For domain targets, resolve all IPs to scan all of them
+        let target_ips = match &self.config.target {
+            Target::Ip(ip) => vec![*ip],
+            Target::Domain(domain) => {
+                // Resolve domain to all IP addresses
+                use tokio::net::lookup_host;
+
+                match lookup_host(format!("{}:80", domain)).await {
+                    Ok(addrs) => {
+                        // Collect all unique IPs (both IPv4 and IPv6)
+                        let ips: Vec<IpAddr> = addrs.map(|addr| addr.ip()).collect();
+
+                        if ips.is_empty() {
+                            return Err(NtraceError::DnsError(format!(
+                                "No IP addresses found for domain: {}",
+                                domain
+                            )));
+                        }
+
+                        debug!("Resolved domain {} to {} IP addresses", domain, ips.len());
+                        ips
+                    }
+                    Err(e) => {
+                        return Err(NtraceError::DnsError(format!(
+                            "Could not resolve domain {}: {}",
+                            domain, e
+                        )));
+                    }
+                }
+            }
+        };
+
+        // We'll use the total number of ports for the progress bar
 
         // Create progress bar if not in a test environment
         let progress_bar = if cfg!(not(test)) {
             use indicatif::{ProgressBar, ProgressStyle};
-            let pb = ProgressBar::new(self.config.ports.len() as u64);
+            let pb = ProgressBar::new(self.config.ports.len() as u64); // Use ports count for length
             pb.set_style(ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ports ({percent}%) {msg}")
+                .template("[{elapsed_precise}] [{spinner:.green}] [{bar:40.cyan/blue}] {pos}/{len} ports ({percent}%) {msg}")
                 .unwrap()
-                .progress_chars("##-"));
+                .progress_chars("##-")
+                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]));
+
+            // Reset the progress bar to ensure consistent counting
+            pb.reset();
+            // Enable steady tick for continuous updates even when no progress is made
+            if self.config.fail_fast || self.config.timeout < Duration::from_millis(100) {
+                pb.enable_steady_tick(std::time::Duration::from_millis(50));
+            } else {
+                pb.enable_steady_tick(std::time::Duration::from_millis(100));
+            }
+            pb.set_message("Scanning...".to_string());
             Some(Arc::new(pb))
         } else {
             None
         };
-
-        // Results container
-        let mut results = Vec::with_capacity(self.config.ports.len());
 
         // Define problematic port ranges to use smaller batch sizes
         let problematic_ranges = vec![
@@ -173,9 +221,6 @@ impl Scanner {
             (5060, 5061),
         ];
 
-        // Create a vector of futures for all ports at once with maximum concurrency
-        let mut futures = Vec::with_capacity(self.config.ports.len());
-
         // First scan common ports (like nmap does) for faster results
         let (common_ports, other_ports): (Vec<_>, Vec<_>) = self
             .config
@@ -186,160 +231,270 @@ impl Scanner {
         // Combine ports with common ones first
         let all_ports = [&common_ports[..], &other_ports[..]].concat();
 
-        // Process all ports at once with maximum concurrency
-        for &port in &all_ports {
-            // Check if this is a problematic port
-            let is_problematic = problematic_ranges
-                .iter()
-                .any(|(start, end)| port >= *start && port <= *end);
+        // For very large port ranges, use batching to avoid memory issues
+        let batch_size =
+            if self.config.fail_fast || self.config.timeout < Duration::from_millis(100) {
+                // Fast mode
+                if all_ports.len() > 20000 {
+                    2000
+                } else if all_ports.len() > 5000 {
+                    1000
+                } else {
+                    // For smaller scans in fast mode, process more at once
+                    all_ports.len().min(2000)
+                }
+            } else if all_ports.len() > 20000 {
+                1000
+            } else if all_ports.len() > 10000 {
+                1000
+            } else if all_ports.len() > 5000 {
+                800
+            } else if all_ports.len() > 1000 {
+                500
+            } else {
+                // For very small scans, process all at once
+                all_ports.len()
+            };
 
-            // Skip problematic ports if fail_fast is enabled
-            if is_problematic && self.config.fail_fast {
-                let result = PortResult {
-                    port,
-                    is_open: false,
-                    service: None,
-                    protocol_info: Some("Skipped (problematic port)".to_string()),
-                    latency: None,
-                    scan_time: chrono::Utc::now(),
+        let mut results: Vec<PortResult> = Vec::with_capacity(all_ports.len());
+
+        // Process ports in batches
+        for port_batch in all_ports.chunks(batch_size) {
+            // Create a vector of futures for this batch
+            // *2 for potential multiple IPs
+            let mut futures = Vec::with_capacity(port_batch.len() * 2);
+
+            // Process ports in this batch
+            for &port in port_batch {
+                // Check if this is a problematic port
+                let is_problematic = problematic_ranges
+                    .iter()
+                    .any(|(start, end)| port >= *start && port <= *end);
+
+                // Skip problematic ports if fail_fast is enabled
+                if is_problematic && self.config.fail_fast {
+                    let result = PortResult {
+                        port,
+                        is_open: false,
+                        service: None,
+                        protocol_info: Some("Skipped (problematic port)".to_string()),
+                        latency: None,
+                        scan_time: chrono::Utc::now(),
+                        resolved_ip: None,
+                    };
+                    results.push(result);
+
+                    // Update statistics
+                    let mut stats = self.stats.lock().await;
+                    stats.scanned_ports += 1;
+                    stats.filtered_ports += 1;
+
+                    // Update progress bar for skipped ports
+                    if let Some(pb) = &progress_bar {
+                        pb.inc(1);
+                    }
+
+                    continue;
+                }
+
+                // For fast mode or large port ranges, only scan the primary IP
+                let scan_ips = if (self.config.fail_fast
+                    || self.config.timeout < Duration::from_millis(100))
+                    && target_ips.len() > 1
+                {
+                    // In fast mode, always use just the first IP
+                    vec![target_ips[0]]
+                } else if self.config.ports.len() > 5000 && target_ips.len() > 1 {
+                    // For medium and large port ranges, just use the first IP
+                    vec![target_ips[0]]
+                } else if target_ips.len() > 3 {
+                    // If there are more than 3 IPs, just use the first 2 for better performance
+                    vec![target_ips[0], target_ips[1]]
+                } else {
+                    // For smaller ranges with fewer IPs, scan all IPs
+                    target_ips.clone()
                 };
-                results.push(result);
 
-                // Update statistics
-                let mut stats = self.stats.lock().await;
-                stats.scanned_ports += 1;
-                stats.filtered_ports += 1;
+                for &ip in &scan_ips {
+                    let mut config = self.config.clone();
+                    // Override the target with the specific IP we're scanning
+                    config.target = Target::Ip(ip);
+                    let analyzer = self.analyzer.clone();
 
-                // Update progress bar
+                    // Use appropriate timeouts based on scan mode
+                    let timeout = if self.config.fail_fast
+                        || self.config.timeout < Duration::from_millis(100)
+                    {
+                        // Fast mode - use very short timeouts
+                        if is_problematic {
+                            Duration::from_millis(30)
+                        } else {
+                            Duration::from_millis(20)
+                        }
+                    } else if is_problematic {
+                        // Reduced from 100ms to 80ms
+                        Duration::from_millis(80)
+                    } else if target_ips.len() > 1 {
+                        // For multi IP domains
+                        Duration::from_millis(100)
+                    } else {
+                        // Reduced from 100ms to 70ms
+                        Duration::from_millis(70)
+                    };
+
+                    // Create a future with a timeout
+                    let future = tokio::time::timeout(timeout, async move {
+                        Self::scan_port(config, port, &analyzer).await
+                    });
+
+                    futures.push((port, future));
+                }
+            }
+
+            // Use tokio::spawn for each future to run them truly in parallel
+            let mut handles = Vec::with_capacity(futures.len());
+
+            for (port, future) in futures {
+                let stats_clone = self.stats.clone();
+
+                let handle = tokio::spawn(async move {
+                    let result = future.await;
+
+                    // Create the port result based on the scan outcome
+                    let port_result = match result {
+                        Ok(Ok(port_result)) => {
+                            // Scan completed successfully
+                            let is_open = port_result.is_open;
+
+                            // Update statistics
+                            let mut stats = stats_clone.lock().await;
+                            stats.scanned_ports += 1;
+
+                            if is_open {
+                                // Just update the closed/open status
+                            } else {
+                                stats.closed_ports += 1;
+                            }
+
+                            port_result
+                        }
+                        Ok(Err(e)) => {
+                            // Scan error
+                            let mut stats = stats_clone.lock().await;
+                            stats.scanned_ports += 1;
+                            stats.errors += 1;
+                            let error_msg = format!("{}", e);
+                            stats
+                                .error_map
+                                .entry(port)
+                                .or_insert_with(Vec::new)
+                                .push(error_msg);
+
+                            // Update progress bar only once per port (not per IP)
+                            // We'll handle this in the batch processing
+
+                            PortResult {
+                                port,
+                                is_open: false,
+                                service: None,
+                                protocol_info: Some("Error".to_string()),
+                                latency: None,
+                                scan_time: chrono::Utc::now(),
+                                resolved_ip: None,
+                            }
+                        }
+                        Err(_) => {
+                            // Timeout
+                            let mut stats = stats_clone.lock().await;
+                            stats.scanned_ports += 1;
+                            stats.filtered_ports += 1;
+                            PortResult {
+                                port,
+                                is_open: false,
+                                service: None,
+                                protocol_info: Some("Timeout".to_string()),
+                                latency: None,
+                                scan_time: chrono::Utc::now(),
+                                resolved_ip: None,
+                            }
+                        }
+                    };
+
+                    port_result
+                });
+
+                handles.push(handle);
+            }
+
+            // Wait for all futures to complete and collect batch results
+            let mut batch_results = Vec::with_capacity(handles.len());
+            for handle in handles {
+                if let Ok(port_result) = handle.await {
+                    batch_results.push(port_result);
+                }
+            }
+
+            // For domains with multiple IPs, merge results to show a port as open if it's open on any IP
+            let mut port_map: HashMap<u16, Vec<PortResult>> = HashMap::new();
+            for result in batch_results {
+                port_map.entry(result.port).or_default().push(result);
+            }
+
+            // Process each port's results in this batch
+            for (_port, port_results) in port_map {
+                // If any result for this port is open, use that one
+                if let Some(open_result) = port_results.iter().find(|r| r.is_open) {
+                    results.push(open_result.clone());
+                } else {
+                    // Otherwise, just use the first result
+                    if let Some(first_result) = port_results.first() {
+                        results.push(first_result.clone());
+                    }
+                }
+
+                // Update progress bar once per port (not per IP)
                 if let Some(pb) = &progress_bar {
                     pb.inc(1);
                 }
-
-                continue;
             }
 
-            let config = self.config.clone();
-            let analyzer = self.analyzer.clone();
+            // Allow a small delay between batches to free up resources
+            if batch_size < all_ports.len() {
+                // Update the progress bar message to show we're still working
+                if let Some(pb) = &progress_bar {
+                    let scanned_so_far = results.len();
+                    let percent_done =
+                        (scanned_so_far as f64 / all_ports.len() as f64 * 100.0) as u64;
+                    pb.set_message(format!("Scanning... {}% complete", percent_done));
 
-            // Use extremely short timeouts for faster scanning
-            let timeout = if is_problematic {
-                Duration::from_millis(30)
-            } else {
-                Duration::from_millis(50)
-            };
+                    // Force a redraw of the progress bar
+                    pb.tick();
+                }
 
-            // Create a future with a timeout
-            let future = tokio::time::timeout(timeout, async move {
-                Self::scan_port(config, port, &analyzer).await
-            });
-
-            futures.push((port, future));
-        }
-
-        // Use tokio::spawn for each future to run them truly in parallel
-        let mut handles = Vec::with_capacity(futures.len());
-
-        for (port, future) in futures {
-            let pb_clone = progress_bar.clone();
-            let stats_clone = self.stats.clone();
-
-            let handle = tokio::spawn(async move {
-                let result = future.await;
-
-                // Create the port result based on the scan outcome
-                let port_result = match result {
-                    Ok(Ok(port_result)) => {
-                        // Scan completed successfully
-                        let is_open = port_result.is_open;
-
-                        // Update statistics
-                        let mut stats = stats_clone.lock().await;
-                        stats.scanned_ports += 1;
-
-                        if is_open {
-                            stats.open_ports += 1;
-
-                            // Update progress bar message
-                            if let Some(pb) = &pb_clone {
-                                pb.set_message(format!("Found {} open ports", stats.open_ports));
-                            }
-                        } else {
-                            stats.closed_ports += 1;
-                        }
-
-                        // Update progress bar
-                        if let Some(pb) = &pb_clone {
-                            pb.inc(1);
-                        }
-
-                        port_result
-                    }
-                    Ok(Err(e)) => {
-                        // Scan error
-                        let mut stats = stats_clone.lock().await;
-                        stats.scanned_ports += 1;
-                        stats.errors += 1;
-                        let error_msg = format!("{}", e);
-                        stats
-                            .error_map
-                            .entry(port)
-                            .or_insert_with(Vec::new)
-                            .push(error_msg);
-
-                        // Update progress bar
-                        if let Some(pb) = &pb_clone {
-                            pb.inc(1);
-                        }
-
-                        PortResult {
-                            port,
-                            is_open: false,
-                            service: None,
-                            protocol_info: Some("Error".to_string()),
-                            latency: None,
-                            scan_time: chrono::Utc::now(),
-                        }
-                    }
-                    Err(_) => {
-                        // Timeout
-                        let mut stats = stats_clone.lock().await;
-                        stats.scanned_ports += 1;
-                        stats.filtered_ports += 1;
-
-                        // Update progress bar
-                        if let Some(pb) = &pb_clone {
-                            pb.inc(1);
-                        }
-
-                        PortResult {
-                            port,
-                            is_open: false,
-                            service: None,
-                            protocol_info: Some("Timeout".to_string()),
-                            latency: None,
-                            scan_time: chrono::Utc::now(),
-                        }
-                    }
-                };
-
-                port_result
-            });
-
-            handles.push(handle);
-        }
-
-        // Wait for all futures to complete and collect results
-        for handle in handles {
-            if let Ok(port_result) = handle.await {
-                results.push(port_result);
+                // Use shorter delay in all modes
+                if self.config.fail_fast || self.config.timeout < Duration::from_millis(100) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                } else {
+                    // Reduced from 50ms to 20ms
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
             }
+        }
+
+        // Count the actual number of open ports in our results
+        let open_ports_count = results.iter().filter(|r| r.is_open).count();
+
+        // Update the stats with the actual count
+        {
+            let mut stats = self.stats.lock().await;
+            stats.open_ports = open_ports_count;
         }
 
         // Finish progress bar
         if let Some(pb) = &progress_bar {
             pb.finish_with_message(format!(
                 "Scan complete: {} open ports found",
-                self.stats.lock().await.open_ports
+                open_ports_count
             ));
         }
 
@@ -372,7 +527,39 @@ impl Scanner {
         if matches!(port, 21 | 22 | 23 | 25 | 80 | 443 | 554 | 1723) {
             // These are common ports - we'll scan them with higher priority
         }
-        let addr = SocketAddr::new(config.host, port);
+
+        // Get the IP address to scan
+        let ip = match &config.target {
+            Target::Ip(ip) => *ip,
+            Target::Domain(domain) => {
+                // Resolve domain to IP address using tokio's async DNS resolver
+                use tokio::net::lookup_host;
+
+                // Use tokio's DNS resolver which is async compatible
+                let mut addrs = match lookup_host(format!("{}:80", domain)).await {
+                    Ok(addrs) => addrs,
+                    Err(e) => {
+                        return Err(NtraceError::DnsError(format!(
+                            "Could not resolve domain {}: {}",
+                            domain, e
+                        )));
+                    }
+                };
+
+                // Get the first IP address (either IPv4 or IPv6)
+                match addrs.next() {
+                    Some(addr) => addr.ip(),
+                    None => {
+                        return Err(NtraceError::DnsError(format!(
+                            "No IP addresses found for domain: {}",
+                            domain
+                        )));
+                    }
+                }
+            }
+        };
+
+        let addr = SocketAddr::new(ip, port);
         let port_start = Instant::now();
         debug!("Scanning port {}", port);
 
@@ -388,49 +575,77 @@ impl Scanner {
                 // Use a non-blocking connect approach similar to Nmap
                 // This is more efficient and less likely to hang
 
-                // 1. Create a non-blocking socket
-                let socket =
-                    match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(20)) {
-                        Ok(s) => {
-                            // Connection succeeded immediately
-                            is_open = true;
-                            latency = Some(port_start.elapsed());
+                // Determine if we're scanning a domain (via IP that came from domain resolution)
+                let is_domain_scan = match &config.target {
+                    Target::Ip(_) => false,
+                    Target::Domain(_) => true,
+                };
 
-                            // Set socket options for service detection
-                            if let Err(e) = s.set_read_timeout(Some(Duration::from_millis(30))) {
-                                debug!("Failed to set read timeout: {}", e);
-                            }
-                            if let Err(e) = s.set_write_timeout(Some(Duration::from_millis(30))) {
-                                debug!("Failed to set write timeout: {}", e);
-                            }
-
-                            Some(s)
-                        }
-                        Err(e) => {
-                            match e.kind() {
-                                std::io::ErrorKind::TimedOut => {
-                                    // Connection timed out - port is likely filtered
-                                    debug!("Connection to port {} timed out", port);
-                                    None
-                                }
-                                std::io::ErrorKind::ConnectionRefused => {
-                                    // Connection refused - port is closed
-                                    debug!("Connection to port {} refused", port);
-                                    None
-                                }
-                                std::io::ErrorKind::PermissionDenied => {
-                                    // Permission denied - likely firewall block
-                                    debug!("Permission denied for port {}", port);
-                                    None
-                                }
-                                _ => {
-                                    // Other error
-                                    debug!("Error connecting to port {}: {}", port, e);
-                                    None
-                                }
-                            }
-                        }
+                // Use appropriate timeouts - shorter for all modes now
+                let connect_timeout =
+                    if config.fail_fast || config.timeout < Duration::from_millis(100) {
+                        // Fast mode
+                        Duration::from_millis(20)
+                    } else if is_domain_scan {
+                        // Normal domain scanning
+                        Duration::from_millis(50)
+                    } else {
+                        // Normal IP scanning
+                        Duration::from_millis(30)
                     };
+
+                // 1. Create a non-blocking socket
+                let socket = match std::net::TcpStream::connect_timeout(&addr, connect_timeout) {
+                    Ok(s) => {
+                        // Connection succeeded immediately
+                        is_open = true;
+                        latency = Some(port_start.elapsed());
+
+                        // Set socket options for service detection
+                        let read_timeout =
+                            if config.fail_fast || config.timeout < Duration::from_millis(100) {
+                                // Fast mode
+                                Duration::from_millis(10)
+                            } else if is_domain_scan {
+                                Duration::from_millis(30)
+                            } else {
+                                Duration::from_millis(20)
+                            };
+
+                        if let Err(e) = s.set_read_timeout(Some(read_timeout)) {
+                            debug!("Failed to set read timeout: {}", e);
+                        }
+                        if let Err(e) = s.set_write_timeout(Some(read_timeout)) {
+                            debug!("Failed to set write timeout: {}", e);
+                        }
+
+                        Some(s)
+                    }
+                    Err(e) => {
+                        match e.kind() {
+                            std::io::ErrorKind::TimedOut => {
+                                // Connection timed out - port is likely filtered
+                                debug!("Connection to port {} timed out", port);
+                                None
+                            }
+                            std::io::ErrorKind::ConnectionRefused => {
+                                // Connection refused - port is closed
+                                debug!("Connection to port {} refused", port);
+                                None
+                            }
+                            std::io::ErrorKind::PermissionDenied => {
+                                // Permission denied - likely firewall block
+                                debug!("Permission denied for port {}", port);
+                                None
+                            }
+                            _ => {
+                                // Other error
+                                debug!("Error connecting to port {}: {}", port, e);
+                                None
+                            }
+                        }
+                    }
+                };
 
                 // If connection was successful, try to detect service
                 if let Some(_stream) = socket {
@@ -460,6 +675,7 @@ impl Scanner {
                                 protocol_info: Some("UDP (error)".to_string()),
                                 latency: None,
                                 scan_time: chrono::Utc::now(),
+                                resolved_ip: None,
                             });
                         }
                         if let Err(e) = s.set_write_timeout(Some(Duration::from_millis(30))) {
@@ -471,6 +687,7 @@ impl Scanner {
                                 protocol_info: Some("UDP (error)".to_string()),
                                 latency: None,
                                 scan_time: chrono::Utc::now(),
+                                resolved_ip: None,
                             });
                         }
                         s
@@ -484,13 +701,15 @@ impl Scanner {
                             protocol_info: Some("UDP (error)".to_string()),
                             latency: None,
                             scan_time: chrono::Utc::now(),
+                            resolved_ip: None,
                         });
                     }
                 };
 
                 // Send a UDP packet
                 let send_start = Instant::now();
-                let target = SocketAddr::new(config.host, port);
+
+                let target = SocketAddr::new(ip, port);
 
                 // Send an empty UDP packet or service specific probe
                 let probe_data = match port {
@@ -513,6 +732,7 @@ impl Scanner {
                         protocol_info: Some("UDP (error)".to_string()),
                         latency: None,
                         scan_time: chrono::Utc::now(),
+                        resolved_ip: None,
                     });
                 }
 
@@ -554,6 +774,12 @@ impl Scanner {
             }
         }
 
+        // Include resolved IP information for domain targets
+        let resolved_ip = match &config.target {
+            Target::Domain(_) => Some(ip.to_string()),
+            Target::Ip(_) => None,
+        };
+
         let result = PortResult {
             port,
             is_open,
@@ -561,6 +787,7 @@ impl Scanner {
             protocol_info,
             latency,
             scan_time: chrono::Utc::now(),
+            resolved_ip,
         };
 
         debug!("Port {} scan completed in {:?}", port, port_start.elapsed());
@@ -572,8 +799,39 @@ impl Scanner {
         // Try to connect to a few common ports to see if host is up
         let common_ports = [80, 443, 22, 25];
 
+        // Get the IP address to ping
+        let ip = match &self.config.target {
+            Target::Ip(ip) => *ip,
+            Target::Domain(domain) => {
+                // Resolve domain to IP address using tokio's async DNS resolver
+                use tokio::net::lookup_host;
+
+                // Use tokio's DNS resolver which is async compatible
+                let mut addrs = match lookup_host(format!("{}:80", domain)).await {
+                    Ok(addrs) => addrs,
+                    Err(e) => {
+                        return Err(NtraceError::DnsError(format!(
+                            "Could not resolve domain {}: {}",
+                            domain, e
+                        )));
+                    }
+                };
+
+                // Get the first IP address (either IPv4 or IPv6)
+                match addrs.next() {
+                    Some(addr) => addr.ip(),
+                    None => {
+                        return Err(NtraceError::DnsError(format!(
+                            "No IP addresses found for domain: {}",
+                            domain
+                        )));
+                    }
+                }
+            }
+        };
+
         for &port in &common_ports {
-            let addr = SocketAddr::new(self.config.host, port);
+            let addr = SocketAddr::new(ip, port);
             // Short timeout for ping
             let timeout = Duration::from_millis(500);
 
@@ -588,11 +846,14 @@ impl Scanner {
         Ok(false)
     }
 
-    /// Get the IP version (IPv4 or IPv6)
+    /// Get the IP version (IPv4/IPv6) or "Domain"
     pub fn ip_version(&self) -> &'static str {
-        match self.config.host {
-            IpAddr::V4(_) => "IPv4",
-            IpAddr::V6(_) => "IPv6",
+        match &self.config.target {
+            Target::Ip(ip) => match ip {
+                IpAddr::V4(_) => "IPv4",
+                IpAddr::V6(_) => "IPv6",
+            },
+            Target::Domain(_) => "Domain",
         }
     }
 }

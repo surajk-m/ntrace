@@ -13,6 +13,15 @@ pub enum Protocol {
     // Add more protocols
 }
 
+/// Represents a scan target, which can be either an IP address or a domain name
+#[derive(Debug, Clone, PartialEq)]
+pub enum Target {
+    /// An IP address (IPv4 or IPv6)
+    Ip(std::net::IpAddr),
+    /// A domain name (e.g., "wikipedia.org")
+    Domain(String),
+}
+
 #[derive(Clone)]
 pub struct ProtocolAnalyzer {
     // Timeout for service detection probes

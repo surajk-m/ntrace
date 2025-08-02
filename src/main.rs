@@ -5,6 +5,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use log::{info, warn};
 use ntrace::cli::Cli;
 use ntrace::output::ScanResult;
+use ntrace::protocol::Target;
 use ntrace::scanner::Scanner;
 use std::time::Instant;
 
@@ -24,16 +25,21 @@ async fn main() -> Result<()> {
     let mut scanner = Scanner::new(config.clone());
 
     if !cli.skip_discovery {
-        info!("Checking if host {} is reachable...", cli.host);
+        let target_display = match &config.target {
+            Target::Ip(ip) => ip.to_string(),
+            Target::Domain(domain) => domain.clone(),
+        };
+
+        info!("Checking if target {} is reachable...", target_display);
 
         if !scanner.ping_host().await? {
             warn!(
-                "Host {} appears to be down or blocking ping requests",
-                cli.host
+                "Target {} appears to be down or blocking ping requests",
+                target_display
             );
             println!(
-                "Warning: Host {} may be down or blocking ping requests",
-                cli.host
+                "Warning: Target {} may be down or blocking ping requests",
+                target_display
             );
             println!("Continuing with scan anyway...");
         }
@@ -50,10 +56,14 @@ async fn main() -> Result<()> {
 
     // Start the scan
     let start_time = Instant::now();
+    let target_display = match &config.target {
+        Target::Ip(ip) => ip.to_string(),
+        Target::Domain(domain) => domain.clone(),
+    };
     println!(
         "Starting scan of {} ports on {}...",
         config.ports.len(),
-        cli.host
+        target_display
     );
 
     // Configure scanner with CLI options
@@ -72,7 +82,7 @@ async fn main() -> Result<()> {
     ));
 
     // Create and display results
-    let scan_result = ScanResult::new(cli.host, results, Some(scan_duration));
+    let scan_result = ScanResult::new(target_display, results, Some(scan_duration));
 
     // Print results based on verbosity
     if cli.verbose {

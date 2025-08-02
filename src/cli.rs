@@ -1,3 +1,4 @@
+use crate::protocol::Target;
 use clap::Parser;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -14,7 +15,7 @@ pub struct Cli {
     #[arg(
         short = 'H',
         long,
-        help = "Target host IP address or hostname (IPv4 or IPv6)"
+        help = "Target IP address, hostname, or web domain (e.g., 192.168.1.1,  wikipedia.org)"
     )]
     pub host: String,
 
@@ -86,8 +87,8 @@ pub struct Cli {
 
 impl Cli {
     pub fn to_config(&self) -> Result<crate::scanner::ScanConfig, anyhow::Error> {
-        // Parse host (support both IP addresses and hostnames)
-        let host = match IpAddr::from_str(&self.host) {
+        // Parse host (support both IP addresses, hostnames, and web domains)
+        let target = match IpAddr::from_str(&self.host) {
             Ok(ip) => {
                 // Check if we need to enforce IP version
                 if self.ipv4 && ip.is_ipv6() {
@@ -99,82 +100,20 @@ impl Cli {
                         "IPv4 address provided but --ipv6 flag was set"
                     ));
                 }
-                ip
+                Target::Ip(ip)
             }
             Err(_) => {
-                // Try to resolve hostname
-                use trust_dns_resolver::Resolver;
-                use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
-
-                let resolver = Resolver::new(ResolverConfig::default(), ResolverOpts::default())?;
-
-                // Determine which IP version to use
-                if self.ipv4 {
-                    // Force IPv4 resolution
-                    match resolver.ipv4_lookup(&self.host)? {
-                        result if result.iter().next().is_some() => {
-                            // Safely dereference the first IP address
-                            IpAddr::V4((*result.iter().next().unwrap()).into())
-                        }
-                        _ => {
-                            return Err(anyhow::anyhow!(
-                                "Could not resolve hostname to IPv4: {}",
-                                self.host
-                            ));
-                        }
-                    }
-                } else if self.ipv6 {
-                    // Force IPv6 resolution
-                    match resolver.ipv6_lookup(&self.host)? {
-                        result if result.iter().next().is_some() => {
-                            // Safely dereference the first IP address
-                            IpAddr::V6((*result.iter().next().unwrap()).into())
-                        }
-                        _ => {
-                            return Err(anyhow::anyhow!(
-                                "Could not resolve hostname to IPv6: {}",
-                                self.host
-                            ));
-                        }
-                    }
+                // Check if this looks like a domain name
+                if self.host.contains('.')
+                    && !self.host.starts_with('.')
+                    && !self.host.ends_with('.')
+                {
+                    // For CLI parsing, we'll just store the domain and resolve it later
+                    // This avoids the async runtime issues with DNS resolution
+                    Target::Domain(self.host.clone())
                 } else {
-                    // Try IPv6 first, then fall back to IPv4
-                    let ipv6_result = resolver.ipv6_lookup(&self.host);
-
-                    match ipv6_result {
-                        Ok(result) => {
-                            if let Some(ip) = result.iter().next() {
-                                IpAddr::V6((*ip).into())
-                            } else {
-                                // No IPv6 address found, try IPv4
-                                match resolver.ipv4_lookup(&self.host)? {
-                                    result if result.iter().next().is_some() => {
-                                        IpAddr::V4((*result.iter().next().unwrap()).into())
-                                    }
-                                    _ => {
-                                        return Err(anyhow::anyhow!(
-                                            "Could not resolve hostname: {}",
-                                            self.host
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // IPv6 lookup failed, try IPv4
-                            match resolver.ipv4_lookup(&self.host)? {
-                                result if result.iter().next().is_some() => {
-                                    IpAddr::V4((*result.iter().next().unwrap()).into())
-                                }
-                                _ => {
-                                    return Err(anyhow::anyhow!(
-                                        "Could not resolve hostname: {}",
-                                        self.host
-                                    ));
-                                }
-                            }
-                        }
-                    }
+                    // Not a valid IP or domain
+                    return Err(anyhow::anyhow!("Invalid host: {}", self.host));
                 }
             }
         };
@@ -191,7 +130,7 @@ impl Cli {
 
         // Create config
         Ok(crate::scanner::ScanConfig {
-            host,
+            target,
             ports,
             timeout: if self.fast {
                 Duration::from_millis(100)
