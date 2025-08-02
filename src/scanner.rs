@@ -367,33 +367,44 @@ impl Scanner {
                     config.target = Target::Ip(ip);
                     let analyzer = self.analyzer.clone();
 
-                    // Use ultra aggressive timeouts for maximum speed
+                    // Check if this is a common web port that needs special handling
+                    let is_important_port =
+                        matches!(port, 80 | 443 | 8080 | 8443 | 3000 | 6001 | 1723);
+
+                    // Use aggressive timeouts but ensure we don't miss ports
                     let timeout = if self.config.ports.len() <= 200 {
                         // For very small port ranges
-                        if port == 80 || port == 443 {
-                            // Common web ports
-                            Duration::from_millis(5)
+                        if matches!(port, 80 | 443 | 6001) {
+                            // Important web ports and X11
+                            Duration::from_millis(30)
+                        } else if is_important_port {
+                            Duration::from_millis(20)
                         } else if is_problematic {
-                            Duration::from_millis(3)
+                            Duration::from_millis(15)
                         } else {
-                            Duration::from_millis(2)
+                            Duration::from_millis(10)
                         }
                     } else if self.config.fail_fast
                         || self.config.timeout < Duration::from_millis(100)
                     {
                         // Fast mode - use very short timeouts
-                        if is_problematic {
-                            Duration::from_millis(3)
+                        if matches!(port, 80 | 443 | 6001) {
+                            // Important web ports and X11
+                            Duration::from_millis(25)
+                        } else if is_important_port {
+                            Duration::from_millis(15)
+                        } else if is_problematic {
+                            Duration::from_millis(10)
                         } else {
-                            Duration::from_millis(2)
+                            Duration::from_millis(8)
                         }
                     } else if is_problematic {
-                        Duration::from_millis(5)
+                        Duration::from_millis(20)
                     } else if target_ips.len() > 1 {
                         // For multi IP domains
-                        Duration::from_millis(3)
+                        Duration::from_millis(15)
                     } else {
-                        Duration::from_millis(2)
+                        Duration::from_millis(12)
                     };
 
                     // Create a future with a timeout
@@ -642,24 +653,48 @@ impl Scanner {
                     Target::Domain(_) => true,
                 };
 
-                // Use ultra fast timeouts for connection
-                let connect_timeout =
+                // Define important ports
+                let is_important_port = matches!(port, 80 | 443 | 8080 | 8443 | 3000 | 6001 | 1723);
+
+                // Use optimized timeouts for connection
+                let connect_timeout = if matches!(port, 80 | 443 | 6001) {
+                    // Important web ports and X11 need more time
                     if config.fail_fast || config.timeout < Duration::from_millis(100) {
                         // Fast mode
-                        Duration::from_millis(10)
-                    } else if is_domain_scan {
-                        // Domain scanning
-                        Duration::from_millis(15)
+                        Duration::from_millis(200)
                     } else {
-                        // IP scanning
-                        Duration::from_millis(10)
-                    };
+                        Duration::from_millis(300)
+                    }
+                } else if is_important_port {
+                    // Other important ports
+                    if config.fail_fast || config.timeout < Duration::from_millis(100) {
+                        // Fast mode
+                        Duration::from_millis(100)
+                    } else {
+                        Duration::from_millis(150)
+                    }
+                } else if config.fail_fast || config.timeout < Duration::from_millis(100) {
+                    // Fast mode
+                    Duration::from_millis(50)
+                } else if is_domain_scan {
+                    // Domain scanning
+                    Duration::from_millis(80)
+                } else {
+                    // IP scanning
+                    Duration::from_millis(50)
+                };
 
-                // Check if this is a common web port that needs special handling
-                let is_important_port = matches!(port, 80 | 443 | 8080 | 8443 | 3000 | 6001);
-
-                // For important ports, try twice but with minimal timeouts
-                let max_attempts = if is_important_port { 2 } else { 1 };
+                // For important ports, try multiple times to ensure we don't miss them
+                let max_attempts = if matches!(port, 80 | 443 | 6001) {
+                    // Critical ports get more retries
+                    5
+                } else if matches!(port, 8080 | 8443 | 3000 | 1723) {
+                    // Other important ports
+                    3
+                } else {
+                    // Regular ports
+                    1
+                };
                 let mut socket = None;
 
                 for attempt in 0..max_attempts {
@@ -674,15 +709,29 @@ impl Scanner {
                             latency = Some(port_start.elapsed());
 
                             // Set socket options for service detection
-                            let read_timeout = if config.fail_fast
+                            let read_timeout = if matches!(port, 80 | 443 | 6001) {
+                                // Important ports need more time for service detection
+                                if config.fail_fast || config.timeout < Duration::from_millis(100) {
+                                    Duration::from_millis(100)
+                                } else {
+                                    Duration::from_millis(150)
+                                }
+                            } else if matches!(port, 8080 | 8443 | 3000 | 1723) {
+                                // Other important ports
+                                if config.fail_fast || config.timeout < Duration::from_millis(100) {
+                                    Duration::from_millis(80)
+                                } else {
+                                    Duration::from_millis(100)
+                                }
+                            } else if config.fail_fast
                                 || config.timeout < Duration::from_millis(100)
                             {
                                 // Fast mode
-                                Duration::from_millis(5)
+                                Duration::from_millis(50)
                             } else if is_domain_scan {
-                                Duration::from_millis(10)
+                                Duration::from_millis(80)
                             } else {
-                                Duration::from_millis(5)
+                                Duration::from_millis(50)
                             };
 
                             if let Err(e) = s.set_read_timeout(Some(read_timeout)) {
