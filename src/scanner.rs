@@ -263,48 +263,33 @@ impl Scanner {
             (5060, 5061),
         ];
 
-        // For very large port ranges, use batching to avoid memory issues
+        // Use much larger batch sizes for faster scanning
         let batch_size = if self.config.ports.len() <= 200 {
-            // For very small port ranges (<=200), use moderate batch size to balance speed and accuracy
-            // Using smaller batches helps ensure we don't miss open ports
-            50.min(all_ports.len())
+            // For very small port ranges, use the entire range as one batch
+            all_ports.len()
         } else if self.config.fail_fast || self.config.timeout < Duration::from_millis(100) {
-            // Fast mode
+            // Fast mode - use very large batches
             if all_ports.len() > 20000 {
-                2000
+                5000
             } else if all_ports.len() > 5000 {
-                1000
+                3000
             } else if all_ports.len() > 1000 {
-                500
-            } else if all_ports.len() > 100 {
-                50
+                1000
             } else {
-                // For very small scans, use small batches for better progress visualization
-                // This ensures the progress bar updates visibly during scanning
-                if all_ports.len() <= 100 {
-                    1 // Process one port at a time for very small ranges
-                } else {
-                    3.max(all_ports.len() / 50)
-                }
+                // For smaller ranges, scan all at once
+                all_ports.len()
             }
         } else if all_ports.len() > 20000 {
-            1000
+            4000
         } else if all_ports.len() > 10000 {
-            1000
+            3000
         } else if all_ports.len() > 5000 {
-            800
+            2000
         } else if all_ports.len() > 1000 {
-            250
-        } else if all_ports.len() > 100 {
-            50
+            1000
         } else {
-            // For very small scans, use small batches for better progress visualization
-            if all_ports.len() <= 100 {
-                // Process one port at a time for very small ranges
-                1
-            } else {
-                3.max(all_ports.len() / 50)
-            }
+            // For small ranges, scan all at once
+            all_ports.len()
         };
 
         let mut results: Vec<PortResult> = Vec::with_capacity(all_ports.len());
@@ -382,36 +367,33 @@ impl Scanner {
                     config.target = Target::Ip(ip);
                     let analyzer = self.analyzer.clone();
 
-                    // Use appropriate timeouts based on scan mode and port range size
+                    // Use ultra aggressive timeouts for maximum speed
                     let timeout = if self.config.ports.len() <= 200 {
-                        // For very small port ranges, use short timeouts but not too short
-                        // We need to balance speed with accuracy to avoid missing open ports
+                        // For very small port ranges
                         if port == 80 || port == 443 {
-                            // Special handling for common web ports that might need more time
-                            Duration::from_millis(50)
+                            // Common web ports
+                            Duration::from_millis(5)
                         } else if is_problematic {
-                            Duration::from_millis(20)
+                            Duration::from_millis(3)
                         } else {
-                            Duration::from_millis(15)
+                            Duration::from_millis(2)
                         }
                     } else if self.config.fail_fast
                         || self.config.timeout < Duration::from_millis(100)
                     {
                         // Fast mode - use very short timeouts
                         if is_problematic {
-                            Duration::from_millis(30)
+                            Duration::from_millis(3)
                         } else {
-                            Duration::from_millis(20)
+                            Duration::from_millis(2)
                         }
                     } else if is_problematic {
-                        // Reduced from 100ms to 80ms
-                        Duration::from_millis(80)
+                        Duration::from_millis(5)
                     } else if target_ips.len() > 1 {
                         // For multi IP domains
-                        Duration::from_millis(100)
+                        Duration::from_millis(3)
                     } else {
-                        // Reduced from 100ms to 70ms
-                        Duration::from_millis(70)
+                        Duration::from_millis(2)
                     };
 
                     // Create a future with a timeout
@@ -542,7 +524,7 @@ impl Scanner {
                 }
             }
 
-            // Allow a small delay between batches to free up resources
+            // Eliminate delays between batches for maximum speed
             if batch_size < all_ports.len() {
                 // Update the progress bar message to show we're still working
                 if let Some(pb) = &progress_bar {
@@ -555,21 +537,8 @@ impl Scanner {
                     pb.tick();
                 }
 
-                // Use shorter delay in all modes
-                if all_ports.len() <= 200 {
-                    // For very small port ranges, skip delays entirely to maximize speed
-                    // Just yield to allow other tasks to run
-                    tokio::task::yield_now().await;
-                } else if all_ports.len() <= 1000 {
-                    // For smaller port ranges, use minimal delay
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                } else if self.config.fail_fast || self.config.timeout < Duration::from_millis(100)
-                {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                } else {
-                    // Reduced from 50ms to 20ms
-                    tokio::time::sleep(Duration::from_millis(20)).await;
-                }
+                // Just yield to allow other tasks to run, no actual sleep
+                tokio::task::yield_now().await;
             }
         }
 
@@ -673,24 +642,24 @@ impl Scanner {
                     Target::Domain(_) => true,
                 };
 
-                // Use appropriate timeouts - increased for better detection
+                // Use ultra fast timeouts for connection
                 let connect_timeout =
                     if config.fail_fast || config.timeout < Duration::from_millis(100) {
                         // Fast mode
-                        Duration::from_millis(100)
+                        Duration::from_millis(10)
                     } else if is_domain_scan {
-                        // Normal domain scanning
-                        Duration::from_millis(200)
+                        // Domain scanning
+                        Duration::from_millis(15)
                     } else {
-                        // Normal IP scanning
-                        Duration::from_millis(150)
+                        // IP scanning
+                        Duration::from_millis(10)
                     };
 
                 // Check if this is a common web port that needs special handling
                 let is_important_port = matches!(port, 80 | 443 | 8080 | 8443 | 3000 | 6001);
 
-                // For important ports, try multiple times with increasing timeouts
-                let max_attempts = if is_important_port { 3 } else { 1 };
+                // For important ports, try twice but with minimal timeouts
+                let max_attempts = if is_important_port { 2 } else { 1 };
                 let mut socket = None;
 
                 for attempt in 0..max_attempts {
@@ -709,11 +678,11 @@ impl Scanner {
                                 || config.timeout < Duration::from_millis(100)
                             {
                                 // Fast mode
-                                Duration::from_millis(50)
+                                Duration::from_millis(5)
                             } else if is_domain_scan {
-                                Duration::from_millis(100)
+                                Duration::from_millis(10)
                             } else {
-                                Duration::from_millis(80)
+                                Duration::from_millis(5)
                             };
 
                             if let Err(e) = s.set_read_timeout(Some(read_timeout)) {

@@ -146,6 +146,13 @@ pub struct Cli {
         help_heading = "MISC OPTIONS"
     )]
     pub skip_problematic: bool,
+
+    #[arg(
+        long,
+        help = "Use SYN scanning for faster results (requires root/admin privileges)",
+        help_heading = "SCAN TECHNIQUES"
+    )]
+    pub syn_scan: bool,
 }
 
 impl Cli {

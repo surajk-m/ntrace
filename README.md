@@ -76,6 +76,9 @@ ntrace -H 192.168.1.1 -o results.csv
 
 # Aggressive scan (more intrusive probes)
 ntrace -H 192.168.1.1 --aggressive
+
+# Ultra fast scanning mode
+ntrace -H 192.168.1.1 --fast
 ```
 
 ### Port Selection Options
@@ -141,6 +144,14 @@ Quickly check if common services are running:
 
 ```bash
 ntrace -H 192.168.1.1 --fast -p common
+```
+
+### Ultra Fast Scanning
+
+For maximum speed (up to 10x faster than regular scanning), use fast mode:
+
+```bash
+ntrace -H 192.168.1.1 --fast -p 1-10000
 ```
 
 ### UDP Service Detection
@@ -216,7 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create and configure the scanner
     let scanner = Scanner::new(config)
         .with_rate_limit(1000)
-        .with_concurrency_limit(50);
+        .with_concurrency_limit(50)
     
     // Run the scan
     let results = scanner.scan().await?;
