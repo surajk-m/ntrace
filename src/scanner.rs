@@ -184,7 +184,8 @@ impl Scanner {
         // Create progress bar if not in a test environment
         let progress_bar = if cfg!(not(test)) {
             use indicatif::{ProgressBar, ProgressStyle};
-            let pb = ProgressBar::new(self.config.ports.len() as u64); // Use ports count for length
+            // Use ports count for length
+            let pb = ProgressBar::new(self.config.ports.len() as u64);
             pb.set_style(ProgressStyle::default_bar()
                 .template("[{elapsed_precise}] [{spinner:.green}] [{bar:40.cyan/blue}] {pos}/{len} ports ({percent}%) {msg}")
                 .unwrap()
@@ -758,11 +759,10 @@ impl Scanner {
                                 // No response - could be filtered or closed
                                 // In UDP, no response usually means filtered
                                 debug!("No UDP response from port {}", port);
-                                protocol_info = Some("UDP (filtered)".to_string());
+                                protocol_info = Some("open|filtered".to_string());
 
-                                // For UDP, we consider filtered ports as potentially open
-                                // This is the approach Nmap takes
-                                is_open = true;
+                                // For UDP, we mark as open|filtered
+                                is_open = false;
                             }
                             _ => {
                                 debug!("Error receiving UDP response from port {}: {}", port, e);

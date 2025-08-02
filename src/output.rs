@@ -46,7 +46,18 @@ impl ScanResult {
 
         // Write data
         for result in &self.results {
-            let status = if result.is_open { "Open" } else { "Closed" };
+            let is_open_filtered = result
+                .protocol_info
+                .as_ref()
+                .map_or(false, |p| p.contains("open|filtered"));
+
+            let status = if result.is_open {
+                "Open"
+            } else if is_open_filtered {
+                "Open|Filtered"
+            } else {
+                "Closed"
+            };
             let unknown = "Unknown".to_string();
             let service = result.service.as_ref().unwrap_or(&unknown);
             let none_str = "None".to_string();
@@ -88,9 +99,24 @@ impl ScanResult {
         println!("{}: {}", "Timestamp".bold(), self.timestamp.to_rfc3339());
         println!("{}: {}", "Ports Scanned".bold(), self.results.len());
 
-        // Count open ports
+        // Count open ports and handle UDP open|filtered ports
         let open_ports = self.results.iter().filter(|r| r.is_open).count();
+        let open_filtered_ports = self
+            .results
+            .iter()
+            .filter(|r| {
+                !r.is_open
+                    && r.protocol_info
+                        .as_ref()
+                        .map_or(false, |p| p.contains("open|filtered"))
+            })
+            .count();
+
         println!("{}: {}", "Open Ports".bold(), open_ports);
+
+        if open_filtered_ports > 0 {
+            println!("{}: {}", "Open|Filtered Ports".bold(), open_filtered_ports);
+        }
         println!();
 
         // Print table header
@@ -106,13 +132,21 @@ impl ScanResult {
 
         // Print results
         for result in &self.results {
-            if !result.is_open {
+            // Show open ports and UDP open|filtered ports
+            let is_open_filtered = result
+                .protocol_info
+                .as_ref()
+                .map_or(false, |p| p.contains("open|filtered"));
+
+            if !result.is_open && !is_open_filtered {
                 // Skip closed ports in the detailed output
                 continue;
             }
 
             let state = if result.is_open {
                 "open".green()
+            } else if is_open_filtered {
+                "open|filtered".yellow()
             } else {
                 "closed".red()
             };
@@ -156,9 +190,26 @@ impl ScanResult {
         println!("{}: {}", "Timestamp".bold(), self.timestamp.to_rfc3339());
         println!("{}: {}", "Ports Scanned".bold(), self.results.len());
 
-        // Count open ports
+        // Count open ports and handle UDP open|filtered ports
         let open_ports = self.results.iter().filter(|r| r.is_open).count();
+        let open_filtered_ports = self
+            .results
+            .iter()
+            .filter(|r| {
+                !r.is_open
+                    && r.protocol_info
+                        .as_ref()
+                        .map_or(false, |p| p.contains("open|filtered"))
+            })
+            .count();
+        let closed_ports = self.results.len() - open_ports - open_filtered_ports;
+
         println!("{}: {}", "Open Ports".bold(), open_ports);
+
+        if open_filtered_ports > 0 {
+            println!("{}: {}", "Open|Filtered Ports".bold(), open_filtered_ports);
+        }
+        println!("{}: {}", "Closed Ports".bold(), closed_ports);
         println!();
 
         // Print table header
@@ -174,8 +225,15 @@ impl ScanResult {
 
         // Print all results
         for result in &self.results {
+            let is_open_filtered = result
+                .protocol_info
+                .as_ref()
+                .map_or(false, |p| p.contains("open|filtered"));
+
             let state = if result.is_open {
                 "open".green()
+            } else if is_open_filtered {
+                "open|filtered".yellow()
             } else {
                 "closed".red()
             };

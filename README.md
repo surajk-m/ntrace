@@ -1,5 +1,7 @@
 # ntrace
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A fast and secure network port scanner and protocol analyzer written in Rust.
 
 ## Features
@@ -83,6 +85,109 @@ ntrace -H 192.168.1.1 --aggressive
 - `all`: Scans all ports (1-65535)
 - `registered`: Scans registered ports (1024-49151)
 - `dynamic`: Scans dynamic ports (49152-65535)
+
+## Scan Examples
+
+### Basic TCP Scan
+
+Scan the most common ports on a web server:
+
+```bash
+ntrace -H wikipedia.org -p common
+```
+
+Output:
+```
+=============================================================
+  _   _ _____                    
+ | \ | |_   _| __ __ _  ___ ___ 
+ |  \| | | || '__/ _` |/ __/ _ \
+ | |\  | | || | | (_| | (_|  __/
+ |_| \_| |_||_|  \__,_|\___\___|
+                                 
+ Network Port Scanner & Protocol Analyzer v0.1.0
+=============================================================
+
+Starting scan of 20 ports on wikipedia.org...
+[00:00:02] Scan completed in 2.34s
+
+Results for wikipedia.org (resolved to 93.184.216.34):
+PORT    STATE   SERVICE         PROTOCOL    LATENCY
+80      open    http            TCP         124.3ms
+443     open    https           TLS/SSL     125.1ms
+
+Summary: 2 open ports, 18 closed ports out of 20 scanned
+```
+
+### Comprehensive Web Server Analysis
+
+Scan all web-related ports with verbose output:
+
+```bash
+ntrace -H wikipedia.org -p 80,443,8080,8443 -v
+```
+
+### Network Service Discovery
+
+Discover all services on a local network device:
+
+```bash
+ntrace -H 192.168.1.1 -p well-known --service-detection
+```
+
+### Fast Network Sweep
+
+Quickly check if common services are running:
+
+```bash
+ntrace -H 192.168.1.1 --fast -p common
+```
+
+### UDP Service Detection
+
+Scan for common UDP services:
+
+```bash
+ntrace -H 192.168.1.1 -P udp -p 53,67,123,161
+```
+
+> **Note about UDP scanning**: Unlike TCP, UDP is connectionless and doesn't have a handshake mechanism. This makes it difficult to determine if a port is truly open or closed. In UDP scanning:
+> - `open`: The port sent back a UDP response (definite open)
+> - `open|filtered`: No response was received, which could mean either the port is open but the service didn't respond, or a firewall is filtering the port
+> - `closed`: An ICMP "port unreachable" message was received
+
+Output:
+```
+=============================================================
+  _   _ _____                    
+ | \ | |_   _| __ __ _  ___ ___ 
+ |  \| | | || '__/ _` |/ __/ _ \
+ | |\  | | || | | (_| | (_|  __/
+ |_| \_| |_||_|  \__,_|\___\___|
+                                 
+ Network Port Scanner & Protocol Analyzer v0.1.0
+=============================================================
+
+Starting scan of 4 ports on 192.168.1.1...
+[00:00:03] Scan completed in 3.12s
+
+Results for 192.168.1.1:
+PORT    STATE           SERVICE         PROTOCOL    LATENCY
+53      open            domain          DNS         45.7ms
+123     open            ntp             NTP         67.2ms
+67      open|filtered   dhcp            UDP         -
+161     open|filtered   snmp            UDP         -
+
+Summary: 2 open ports, 2 open|filtered ports out of 4 scanned
+```
+
+### Exporting Scan Results
+
+Scan and save results in JSON format for further analysis:
+
+```bash
+ntrace -H wikipedia.org -p 1-1000 -o scan-results.json
+```
 
 ## Library Usage
 
