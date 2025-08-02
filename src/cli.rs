@@ -11,8 +11,18 @@ use std::time::Duration;
     long_about = "ntrace is a fast and secure tool for scanning TCP/UDP ports and analyzing network protocols."
 )]
 pub struct Cli {
-    #[arg(short = 'H', long, help = "Target host IP address or hostname")]
+    #[arg(
+        short = 'H',
+        long,
+        help = "Target host IP address or hostname (IPv4 or IPv6)"
+    )]
     pub host: String,
+
+    #[arg(long, help = "Force IPv6 scanning")]
+    pub ipv6: bool,
+
+    #[arg(long, help = "Force IPv4 scanning")]
+    pub ipv4: bool,
 
     #[arg(
         short,
@@ -66,23 +76,104 @@ pub struct Cli {
 
     #[arg(long, help = "Aggressive scan (more intrusive probes)")]
     pub aggressive: bool,
+
+    #[arg(long, help = "Fast scan with shorter timeouts (less accurate)")]
+    pub fast: bool,
+
+    #[arg(long, help = "Skip problematic ports that often cause hangs")]
+    pub skip_problematic: bool,
 }
 
 impl Cli {
     pub fn to_config(&self) -> Result<crate::scanner::ScanConfig, anyhow::Error> {
         // Parse host (support both IP addresses and hostnames)
         let host = match IpAddr::from_str(&self.host) {
-            Ok(ip) => ip,
+            Ok(ip) => {
+                // Check if we need to enforce IP version
+                if self.ipv4 && ip.is_ipv6() {
+                    return Err(anyhow::anyhow!(
+                        "IPv6 address provided but --ipv4 flag was set"
+                    ));
+                } else if self.ipv6 && ip.is_ipv4() {
+                    return Err(anyhow::anyhow!(
+                        "IPv4 address provided but --ipv6 flag was set"
+                    ));
+                }
+                ip
+            }
             Err(_) => {
                 // Try to resolve hostname
                 use trust_dns_resolver::Resolver;
                 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
                 let resolver = Resolver::new(ResolverConfig::default(), ResolverOpts::default())?;
-                match resolver.lookup_ip(&self.host)?.iter().next() {
-                    Some(ip) => ip,
-                    None => {
-                        return Err(anyhow::anyhow!("Could not resolve hostname: {}", self.host));
+
+                // Determine which IP version to use
+                if self.ipv4 {
+                    // Force IPv4 resolution
+                    match resolver.ipv4_lookup(&self.host)? {
+                        result if result.iter().next().is_some() => {
+                            // Safely dereference the first IP address
+                            IpAddr::V4((*result.iter().next().unwrap()).into())
+                        }
+                        _ => {
+                            return Err(anyhow::anyhow!(
+                                "Could not resolve hostname to IPv4: {}",
+                                self.host
+                            ));
+                        }
+                    }
+                } else if self.ipv6 {
+                    // Force IPv6 resolution
+                    match resolver.ipv6_lookup(&self.host)? {
+                        result if result.iter().next().is_some() => {
+                            // Safely dereference the first IP address
+                            IpAddr::V6((*result.iter().next().unwrap()).into())
+                        }
+                        _ => {
+                            return Err(anyhow::anyhow!(
+                                "Could not resolve hostname to IPv6: {}",
+                                self.host
+                            ));
+                        }
+                    }
+                } else {
+                    // Try IPv6 first, then fall back to IPv4
+                    let ipv6_result = resolver.ipv6_lookup(&self.host);
+
+                    match ipv6_result {
+                        Ok(result) => {
+                            if let Some(ip) = result.iter().next() {
+                                IpAddr::V6((*ip).into())
+                            } else {
+                                // No IPv6 address found, try IPv4
+                                match resolver.ipv4_lookup(&self.host)? {
+                                    result if result.iter().next().is_some() => {
+                                        IpAddr::V4((*result.iter().next().unwrap()).into())
+                                    }
+                                    _ => {
+                                        return Err(anyhow::anyhow!(
+                                            "Could not resolve hostname: {}",
+                                            self.host
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // IPv6 lookup failed, try IPv4
+                            match resolver.ipv4_lookup(&self.host)? {
+                                result if result.iter().next().is_some() => {
+                                    IpAddr::V4((*result.iter().next().unwrap()).into())
+                                }
+                                _ => {
+                                    return Err(anyhow::anyhow!(
+                                        "Could not resolve hostname: {}",
+                                        self.host
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -102,60 +193,77 @@ impl Cli {
         Ok(crate::scanner::ScanConfig {
             host,
             ports,
-            timeout: Duration::from_secs_f32(self.timeout),
+            timeout: if self.fast {
+                Duration::from_millis(100)
+            } else {
+                Duration::from_secs_f32(self.timeout)
+            },
             protocol,
             batch_size: self.batch_size,
+            // Fewer retries in fast mode
+            max_retries: if self.fast { 1 } else { 3 },
+            retry_delay: if self.fast {
+                Duration::from_millis(100)
+            } else {
+                Duration::from_millis(500)
+            },
+            // Fail fast in fast mode or when skipping problematic ports
+            fail_fast: self.fast || self.skip_problematic,
         })
     }
 
     pub fn parse_ports(&self) -> Result<Vec<u16>, anyhow::Error> {
         let mut ports = Vec::new();
 
-        // Handle special keywords
+        // Handle predefined port groups
         match self.ports.to_lowercase().as_str() {
             "common" => {
                 // Common ports for quick scanning
-                return Ok(vec![
+                ports.extend_from_slice(&[
                     21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995, 1723,
-                    3306, 3389, 5900, 8080, 8443,
+                    3306, 3389, 5900, 8080,
                 ]);
             }
-            "all" => {
-                // All ports (1-65535)
-                return Ok((1..=65535).collect());
-            }
             "well-known" => {
-                // Well-known ports (1-1023)
-                return Ok((1..=1023).collect());
+                // Well known ports (1-1023)
+                ports.extend(1..=1023);
             }
             "registered" => {
                 // Registered ports (1024-49151)
-                return Ok((1024..=49151).collect());
+                ports.extend(1024..=49151);
             }
             "dynamic" => {
                 // Dynamic ports (49152-65535)
-                return Ok((49152..=65535).collect());
+                ports.extend(49152..=65535);
             }
-            _ => {}
+            "all" => {
+                // All ports (1-65535)
+                ports.extend(1..=65535);
+            }
+            _ => {
+                // Parse custom port specification (e.g., "80,443,8080" or "1-1000")
+                for part in self.ports.split(',') {
+                    if part.contains('-') {
+                        // Port range
+                        let range: Vec<&str> = part.split('-').collect();
+                        if range.len() == 2 {
+                            let start = range[0].parse::<u16>()?;
+                            let end = range[1].parse::<u16>()?;
+                            ports.extend(start..=end);
+                        } else {
+                            return Err(anyhow::anyhow!("Invalid port range: {}", part));
+                        }
+                    } else {
+                        // Single port
+                        ports.push(part.parse::<u16>()?);
+                    }
+                }
+            }
         }
 
-        // Parse range or comma separated list
-        if self.ports.contains('-') {
-            let parts: Vec<&str> = self.ports.split('-').collect();
-            if parts.len() != 2 {
-                return Err(anyhow::anyhow!("Invalid port range: {}", self.ports));
-            }
-            let start: u16 = parts[0].parse()?;
-            let end: u16 = parts[1].parse()?;
-            ports.extend(start..=end);
-        } else if self.ports.contains(',') {
-            for port in self.ports.split(',') {
-                ports.push(port.parse()?);
-            }
-        } else {
-            // Single port
-            ports.push(self.ports.parse()?);
-        }
+        // Remove duplicates
+        ports.sort();
+        ports.dedup();
 
         Ok(ports)
     }

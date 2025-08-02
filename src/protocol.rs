@@ -49,7 +49,39 @@ impl ProtocolAnalyzer {
                 self.try_service_probes(stream).await
             }
             Protocol::Udp => {
-                // UDP service detection would be implemented here
+                // UDP service detection based on port number and responses
+                let port = match stream.peer_addr() {
+                    Ok(addr) => addr.port(),
+                    Err(_) => return Ok(None),
+                };
+
+                // Common UDP services by port
+                let service = match port {
+                    53 => Some("domain"),
+                    67 | 68 => Some("dhcp"),
+                    69 => Some("tftp"),
+                    123 => Some("ntp"),
+                    161 => Some("snmp"),
+                    162 => Some("snmptrap"),
+                    500 => Some("isakmp"),
+                    514 => Some("syslog"),
+                    520 => Some("rip"),
+                    1194 => Some("openvpn"),
+                    1900 => Some("upnp"),
+                    5353 => Some("mdns"),
+                    _ => None,
+                };
+
+                if let Some(svc) = service {
+                    return Ok(Some(svc.to_string()));
+                }
+
+                // For unknown ports, check the well known services database
+                let default_service = get_service_name(port);
+                if default_service != "unknown" {
+                    return Ok(Some(default_service.to_string()));
+                }
+
                 Ok(None)
             }
         }
@@ -157,7 +189,23 @@ impl ProtocolAnalyzer {
                     _ => Ok(None),
                 }
             }
-            Protocol::Udp => Ok(None),
+            Protocol::Udp => {
+                // Get the port number
+                let port = match stream.peer_addr() {
+                    Ok(addr) => addr.port(),
+                    Err(_) => return Ok(None),
+                };
+
+                // Analyze UDP protocol based on port
+                match port {
+                    53 => self.analyze_dns().await,
+                    123 => self.analyze_ntp().await,
+                    161 | 162 => self.analyze_snmp().await,
+                    500 => self.analyze_ipsec().await,
+                    1194 => self.analyze_openvpn().await,
+                    _ => Ok(Some("UDP".to_string())),
+                }
+            }
         }
     }
 
@@ -181,13 +229,43 @@ impl ProtocolAnalyzer {
 
     /// Analyze FTP protocol details
     async fn analyze_ftp(&self, _stream: &TcpStream) -> Result<Option<String>, NtraceError> {
-        // In a production version, this would determine FTP server type, features, etc.
+        // In a production version, this would determine FTP version, supported commands, etc.
         Ok(Some("FTP".to_string()))
     }
 
     /// Analyze SMTP protocol details
     async fn analyze_smtp(&self, _stream: &TcpStream) -> Result<Option<String>, NtraceError> {
-        // In a production version, this would determine SMTP server type, supported extensions, etc.
+        // In a production version, this would determine SMTP version, supported extensions, etc.
         Ok(Some("SMTP".to_string()))
+    }
+
+    /// Analyze DNS protocol details (UDP)
+    async fn analyze_dns(&self) -> Result<Option<String>, NtraceError> {
+        // In a production version, this would determine DNS server type, version, etc.
+        Ok(Some("DNS".to_string()))
+    }
+
+    /// Analyze NTP protocol details (UDP)
+    async fn analyze_ntp(&self) -> Result<Option<String>, NtraceError> {
+        // In a production version, this would determine NTP version, mode, etc.
+        Ok(Some("NTP".to_string()))
+    }
+
+    /// Analyze SNMP protocol details (UDP)
+    async fn analyze_snmp(&self) -> Result<Option<String>, NtraceError> {
+        // In a production version, this would determine SNMP version, community strings, etc.
+        Ok(Some("SNMP".to_string()))
+    }
+
+    /// Analyze IPsec/ISAKMP protocol details (UDP)
+    async fn analyze_ipsec(&self) -> Result<Option<String>, NtraceError> {
+        // In a production version, this would determine IPsec version, supported transforms, etc.
+        Ok(Some("IPsec/ISAKMP".to_string()))
+    }
+
+    /// Analyze OpenVPN protocol details (UDP)
+    async fn analyze_openvpn(&self) -> Result<Option<String>, NtraceError> {
+        // In a production version, this would determine OpenVPN version, etc.
+        Ok(Some("OpenVPN".to_string()))
     }
 }
