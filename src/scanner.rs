@@ -154,28 +154,53 @@ impl Scanner {
                 // Resolve domain to all IP addresses
                 use tokio::net::lookup_host;
 
-                match lookup_host(format!("{}:80", domain)).await {
-                    Ok(addrs) => {
-                        // Collect all unique IPs (both IPv4 and IPv6)
-                        let ips: Vec<IpAddr> = addrs.map(|addr| addr.ip()).collect();
+                // Try multiple service ports to get all possible IPs
+                let mut all_ips = Vec::new();
 
-                        if ips.is_empty() {
-                            return Err(NtraceError::DnsError(format!(
-                                "No IP addresses found for domain: {}",
-                                domain
-                            )));
+                // Try common ports to get all possible IPs from load balancers
+                for port in [80, 443, 8080, 21, 22, 25] {
+                    if let Ok(addrs) = lookup_host(format!("{}:{}", domain, port)).await {
+                        for addr in addrs {
+                            let ip = addr.ip();
+                            if !all_ips.contains(&ip) {
+                                all_ips.push(ip);
+                            }
                         }
-
-                        debug!("Resolved domain {} to {} IP addresses", domain, ips.len());
-                        ips
-                    }
-                    Err(e) => {
-                        return Err(NtraceError::DnsError(format!(
-                            "Could not resolve domain {}: {}",
-                            domain, e
-                        )));
                     }
                 }
+
+                if all_ips.is_empty() {
+                    // Fallback to standard lookup if no IPs found
+                    match lookup_host(format!("{}:80", domain)).await {
+                        Ok(addrs) => {
+                            // Collect all unique IPs (both IPv4 and IPv6)
+                            let ips: Vec<IpAddr> = addrs.map(|addr| addr.ip()).collect();
+
+                            if ips.is_empty() {
+                                return Err(NtraceError::DnsError(format!(
+                                    "No IP addresses found for domain: {}",
+                                    domain
+                                )));
+                            }
+
+                            debug!("Resolved domain {} to {} IP addresses", domain, ips.len());
+                            all_ips = ips;
+                        }
+                        Err(e) => {
+                            return Err(NtraceError::DnsError(format!(
+                                "Could not resolve domain {}: {}",
+                                domain, e
+                            )));
+                        }
+                    }
+                }
+
+                debug!(
+                    "Resolved domain {} to {} IP addresses",
+                    domain,
+                    all_ips.len()
+                );
+                all_ips
             }
         };
 
@@ -298,8 +323,11 @@ impl Scanner {
                     continue;
                 }
 
-                // For fast mode or large port ranges, only scan the primary IP
-                let scan_ips = if (self.config.fail_fast
+                // Always scan all IPs for small port ranges (<100 ports)
+                let scan_ips = if self.config.ports.len() < 100 {
+                    // For small port ranges, always scan all IPs
+                    target_ips.clone()
+                } else if (self.config.fail_fast
                     || self.config.timeout < Duration::from_millis(100))
                     && target_ips.len() > 1
                 {
@@ -582,71 +610,97 @@ impl Scanner {
                     Target::Domain(_) => true,
                 };
 
-                // Use appropriate timeouts - shorter for all modes now
+                // Use appropriate timeouts - increased for better detection
                 let connect_timeout =
                     if config.fail_fast || config.timeout < Duration::from_millis(100) {
                         // Fast mode
-                        Duration::from_millis(20)
+                        Duration::from_millis(100)
                     } else if is_domain_scan {
                         // Normal domain scanning
-                        Duration::from_millis(50)
+                        Duration::from_millis(200)
                     } else {
                         // Normal IP scanning
-                        Duration::from_millis(30)
+                        Duration::from_millis(150)
                     };
 
-                // 1. Create a non-blocking socket
-                let socket = match std::net::TcpStream::connect_timeout(&addr, connect_timeout) {
-                    Ok(s) => {
-                        // Connection succeeded immediately
-                        is_open = true;
-                        latency = Some(port_start.elapsed());
+                // Check if this is a common web port that needs special handling
+                let is_important_port = matches!(port, 80 | 443 | 8080 | 8443 | 3000 | 6001);
 
-                        // Set socket options for service detection
-                        let read_timeout =
-                            if config.fail_fast || config.timeout < Duration::from_millis(100) {
+                // For important ports, try multiple times with increasing timeouts
+                let max_attempts = if is_important_port { 3 } else { 1 };
+                let mut socket = None;
+
+                for attempt in 0..max_attempts {
+                    // Increase timeout for each retry
+                    let attempt_timeout = connect_timeout.mul_f32(1.0 + (attempt as f32 * 0.5));
+
+                    // 1. Create a non-blocking socket
+                    match std::net::TcpStream::connect_timeout(&addr, attempt_timeout) {
+                        Ok(s) => {
+                            // Connection succeeded
+                            is_open = true;
+                            latency = Some(port_start.elapsed());
+
+                            // Set socket options for service detection
+                            let read_timeout = if config.fail_fast
+                                || config.timeout < Duration::from_millis(100)
+                            {
                                 // Fast mode
-                                Duration::from_millis(10)
+                                Duration::from_millis(50)
                             } else if is_domain_scan {
-                                Duration::from_millis(30)
+                                Duration::from_millis(100)
                             } else {
-                                Duration::from_millis(20)
+                                Duration::from_millis(80)
                             };
 
-                        if let Err(e) = s.set_read_timeout(Some(read_timeout)) {
-                            debug!("Failed to set read timeout: {}", e);
-                        }
-                        if let Err(e) = s.set_write_timeout(Some(read_timeout)) {
-                            debug!("Failed to set write timeout: {}", e);
-                        }
+                            if let Err(e) = s.set_read_timeout(Some(read_timeout)) {
+                                debug!("Failed to set read timeout: {}", e);
+                            }
+                            if let Err(e) = s.set_write_timeout(Some(read_timeout)) {
+                                debug!("Failed to set write timeout: {}", e);
+                            }
 
-                        Some(s)
-                    }
-                    Err(e) => {
-                        match e.kind() {
-                            std::io::ErrorKind::TimedOut => {
-                                // Connection timed out - port is likely filtered
-                                debug!("Connection to port {} timed out", port);
-                                None
-                            }
-                            std::io::ErrorKind::ConnectionRefused => {
-                                // Connection refused - port is closed
-                                debug!("Connection to port {} refused", port);
-                                None
-                            }
-                            std::io::ErrorKind::PermissionDenied => {
-                                // Permission denied - likely firewall block
-                                debug!("Permission denied for port {}", port);
-                                None
-                            }
-                            _ => {
-                                // Other error
-                                debug!("Error connecting to port {}: {}", port, e);
-                                None
+                            socket = Some(s);
+                            // Connection successful, exit retry loop
+                            break;
+                        }
+                        Err(e) => {
+                            match e.kind() {
+                                std::io::ErrorKind::TimedOut => {
+                                    // Connection timed out - port is likely filtered
+                                    debug!(
+                                        "Connection to port {} timed out (attempt {})",
+                                        port,
+                                        attempt + 1
+                                    );
+                                    // Continue to next attempt if we haven't reached max_attempts
+                                }
+                                std::io::ErrorKind::ConnectionRefused => {
+                                    // Connection refused - port is closed
+                                    debug!("Connection to port {} refused", port);
+                                    // No need to retry if connection is refused
+                                    break;
+                                }
+                                std::io::ErrorKind::PermissionDenied => {
+                                    // Permission denied - likely firewall block
+                                    debug!("Permission denied for port {}", port);
+                                    // No need to retry if permission denied
+                                    break;
+                                }
+                                _ => {
+                                    // Other error
+                                    debug!(
+                                        "Error connecting to port {}: {} (attempt {})",
+                                        port,
+                                        e,
+                                        attempt + 1
+                                    );
+                                    // Continue to next attempt if we haven't reached max_attempts
+                                }
                             }
                         }
                     }
-                };
+                }
 
                 // If connection was successful, try to detect service
                 if let Some(_stream) = socket {
