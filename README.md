@@ -194,7 +194,7 @@ ntrace -H wikipedia.org -p 1-1000 -o scan-results.json
 ntrace can also be used as a library in your Rust projects:
 
 ```rust
-use ntrace::{Scanner, ScanConfig, Protocol, PortResult};
+use ntrace::{Scanner, ScanConfig, Protocol, Target};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::Duration;
@@ -203,11 +203,14 @@ use std::time::Duration;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure the scanner
     let config = ScanConfig {
-        host: IpAddr::from_str("192.168.1.1")?,
+        target: Target::Ip(IpAddr::from_str("192.168.1.1")?),
         ports: vec![80, 443, 8080],
         timeout: Duration::from_secs(2),
         protocol: Protocol::Tcp,
         batch_size: 100,
+        max_retries: 3,
+        retry_delay: Duration::from_millis(500),
+        fail_fast: false,
     };
 
     // Create and configure the scanner
