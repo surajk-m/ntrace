@@ -7,7 +7,7 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(
     name = "ntrace",
-    version = "0.1.0",
+    version = "0.1.3",
     about = "Network port scanner and protocol analyzer",
     long_about = "ntrace is a tool for scanning TCP/UDP ports and analyzing network protocols.",
     next_line_help = true,

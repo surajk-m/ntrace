@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap_builder::Parser;
+use colored::Colorize;
 use env_logger::Env;
 use log::{info, warn};
 use ntrace::cli::Cli;
@@ -91,13 +92,71 @@ async fn main() -> Result<()> {
 }
 
 fn print_banner() {
-    println!("\n{}", "=".repeat(60));
-    println!("  _   _ _____                    ");
-    println!(" | \\ | |_   _| __ __ _  ___ ___ ");
-    println!(" |  \\| | | || '__/ _` |/ __/ _ \\");
-    println!(" | |\\  | | || | | (_| | (_|  __/");
-    println!(" |_| \\_| |_||_|  \\__,_|\\___\\___|");
-    println!("                                 ");
-    println!(" Network Port Scanner & Protocol Analyzer v0.1.0");
-    println!("{}\n", "=".repeat(60));
+    let box_width = 60;
+    println!(
+        "\n{}",
+        format!("╔{}╗", "═".repeat(box_width - 2)).blue().bold()
+    );
+    println!(
+        "{} {} {}",
+        "║".blue().bold(),
+        " ".repeat((box_width - 4) / 2),
+        "║".blue().bold()
+    );
+    println!(
+        "{} {} {}",
+        "║".blue().bold(),
+        "  _   _ _____                    ".bright_green().bold(),
+        "║".blue().bold()
+    );
+    println!(
+        "{} {} {}",
+        "║".blue().bold(),
+        " | \\ | |_   _| __ __ _  ___ ___ ".bright_green().bold(),
+        "║".blue().bold()
+    );
+    println!(
+        "{} {} {}",
+        "║".blue().bold(),
+        " |  \\| | | || '__/ _` |/ __/ _ \\".bright_green().bold(),
+        "║".blue().bold()
+    );
+    println!(
+        "{} {} {}",
+        "║".blue().bold(),
+        " | |\\  | | || | | (_| | (_|  __/".bright_green().bold(),
+        "║".blue().bold()
+    );
+    println!(
+        "{} {} {}",
+        "║".blue().bold(),
+        " |_| \\_| |_||_|  \\__,_|\\___\\___|".bright_green().bold(),
+        "║".blue().bold()
+    );
+    println!(
+        "{} {} {}",
+        "║".blue().bold(),
+        " ".repeat((box_width - 4) / 2),
+        "║".blue().bold()
+    );
+    println!(
+        "{} {} {}",
+        "║".blue().bold(),
+        " Network Port Scanner & Protocol Analyzer v0.1.3 "
+            .on_bright_blue()
+            .white()
+            .bold(),
+        "║".blue().bold()
+    );
+    println!(
+        "{} {} {}",
+        "║".blue().bold(),
+        " ".repeat((box_width - 4) / 2),
+        "║".blue().bold()
+    );
+    println!(
+        "{}",
+        format!("╚{}╝", "═".repeat(box_width - 2)).blue().bold()
+    );
+    println!();
 }

@@ -85,19 +85,56 @@ impl ScanResult {
 
     pub fn print(&self) {
         // Print header
-        println!("{}", "\nScan Results".bold());
-        println!("{}: {}", "Target".bold(), self.host);
+        let box_width = 70;
+        println!(
+            "\n{}",
+            format!("╔{}╗", "═".repeat(box_width - 2)).blue().bold()
+        );
+        println!(
+            "{} {} {}",
+            "║".blue().bold(),
+            " SCAN RESULTS ".on_bright_blue().white().bold(),
+            "║".blue().bold()
+        );
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Target info in a nice format
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Target".bold(),
+            self.host.bright_white(),
+            "║".blue().bold()
+        );
 
         if let Some(duration) = self.scan_duration {
             println!(
-                "{}: {:.2} seconds",
+                "{} {}: {:.2} seconds {} ",
+                "║".blue().bold(),
                 "Duration".bold(),
-                duration.as_secs_f64()
+                duration.as_secs_f64(),
+                "║".blue().bold()
             );
         }
 
-        println!("{}: {}", "Timestamp".bold(), self.timestamp.to_rfc3339());
-        println!("{}: {}", "Ports Scanned".bold(), self.results.len());
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Timestamp".bold(),
+            self.timestamp.to_rfc3339(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Ports Scanned".bold(),
+            self.results.len().to_string().bright_white(),
+            "║".blue().bold()
+        );
 
         // Count open ports and handle UDP open|filtered ports
         let open_ports = self.results.iter().filter(|r| r.is_open).count();
@@ -112,23 +149,45 @@ impl ScanResult {
             })
             .count();
 
-        println!("{}: {}", "Open Ports".bold(), open_ports);
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Open Ports".bold(),
+            open_ports.to_string().green().bold(),
+            "║".blue().bold()
+        );
 
         if open_filtered_ports > 0 {
-            println!("{}: {}", "Open|Filtered Ports".bold(), open_filtered_ports);
+            println!(
+                "{} {}: {} {}",
+                "║".blue().bold(),
+                "Open|Filtered Ports".bold(),
+                open_filtered_ports.to_string().yellow().bold(),
+                "║".blue().bold()
+            );
         }
-        println!();
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
 
         // Print table header
         println!(
-            "{:6} {:10} {:20} {:20} {:10}",
+            "{} {:6} {:10} {:20} {:20} {:10} {}",
+            "║".blue().bold(),
             "PORT".bold(),
             "STATE".bold(),
             "SERVICE".bold(),
             "PROTOCOL".bold(),
-            "LATENCY".bold()
+            "LATENCY".bold(),
+            "║".blue().bold()
         );
-        println!("{}", "-".repeat(70));
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
 
         // Print results
         for result in &self.results {
@@ -144,12 +203,13 @@ impl ScanResult {
             }
 
             let state = if result.is_open {
-                "open".green()
+                "open".green().bold()
             } else if is_open_filtered {
-                "open|filtered".yellow()
+                "open|filtered".yellow().bold()
             } else {
-                "closed".red()
+                "closed".red().bold()
             };
+
             let unknown = "unknown".to_string();
             let service = result.service.as_ref().unwrap_or(&unknown);
             let dash = "-".to_string();
@@ -160,35 +220,82 @@ impl ScanResult {
                 None => "-".to_string(),
             };
 
+            // Display port number clearly without background color
+            let port_display = result.port.to_string().bold();
+
             println!(
-                "{:6} {:10} {:20} {:20} {:10}",
-                result.port.to_string(),
+                "{} {:^6} {:10} {:20} {:20} {:10} {}",
+                "║".blue().bold(),
+                port_display,
                 state,
-                service,
+                service.bright_white(),
                 protocol,
-                latency
+                latency,
+                "║".blue().bold()
             );
         }
 
+        // Close the box
+        println!(
+            "{}",
+            format!("╚{}╝", "═".repeat(box_width - 2)).blue().bold()
+        );
         println!();
     }
 
     /// Print a verbose version including closed ports
     pub fn print_verbose(&self) {
         // Print header
-        println!("{}", "\nDetailed Scan Results".bold());
-        println!("{}: {}", "Target".bold(), self.host);
+        let box_width = 70;
+        println!(
+            "\n{}",
+            format!("╔{}╗", "═".repeat(box_width - 2)).blue().bold()
+        );
+        println!(
+            "{} {} {}",
+            "║".blue().bold(),
+            " DETAILED SCAN RESULTS ".on_bright_blue().white().bold(),
+            "║".blue().bold()
+        );
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Target info
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Target".bold(),
+            self.host.bright_white(),
+            "║".blue().bold()
+        );
 
         if let Some(duration) = self.scan_duration {
             println!(
-                "{}: {:.2} seconds",
+                "{} {}: {:.2} seconds {} ",
+                "║".blue().bold(),
                 "Duration".bold(),
-                duration.as_secs_f64()
+                duration.as_secs_f64(),
+                "║".blue().bold()
             );
         }
 
-        println!("{}: {}", "Timestamp".bold(), self.timestamp.to_rfc3339());
-        println!("{}: {}", "Ports Scanned".bold(), self.results.len());
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Timestamp".bold(),
+            self.timestamp.to_rfc3339(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Ports Scanned".bold(),
+            self.results.len().to_string().bright_white(),
+            "║".blue().bold()
+        );
 
         // Count open ports and handle UDP open|filtered ports
         let open_ports = self.results.iter().filter(|r| r.is_open).count();
@@ -204,24 +311,53 @@ impl ScanResult {
             .count();
         let closed_ports = self.results.len() - open_ports - open_filtered_ports;
 
-        println!("{}: {}", "Open Ports".bold(), open_ports);
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Open Ports".bold(),
+            open_ports.to_string().green().bold(),
+            "║".blue().bold()
+        );
 
         if open_filtered_ports > 0 {
-            println!("{}: {}", "Open|Filtered Ports".bold(), open_filtered_ports);
+            println!(
+                "{} {}: {} {}",
+                "║".blue().bold(),
+                "Open|Filtered Ports".bold(),
+                open_filtered_ports.to_string().yellow().bold(),
+                "║".blue().bold()
+            );
         }
-        println!("{}: {}", "Closed Ports".bold(), closed_ports);
-        println!();
 
-        // Print table header
         println!(
-            "{:6} {:10} {:20} {:20} {:10}",
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Closed Ports".bold(),
+            closed_ports.to_string().red().bold(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Print table header with fancy formatting
+        println!(
+            "{} {:6} {:10} {:20} {:20} {:10} {}",
+            "║".blue().bold(),
             "PORT".bold(),
             "STATE".bold(),
             "SERVICE".bold(),
             "PROTOCOL".bold(),
-            "LATENCY".bold()
+            "LATENCY".bold(),
+            "║".blue().bold()
         );
-        println!("{}", "-".repeat(70));
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
 
         // Print all results
         for result in &self.results {
@@ -231,12 +367,13 @@ impl ScanResult {
                 .map_or(false, |p| p.contains("open|filtered"));
 
             let state = if result.is_open {
-                "open".green()
+                "open".green().bold()
             } else if is_open_filtered {
-                "open|filtered".yellow()
+                "open|filtered".yellow().bold()
             } else {
-                "closed".red()
+                "closed".red().bold()
             };
+
             let unknown = "unknown".to_string();
             let service = result.service.as_ref().unwrap_or(&unknown);
             let dash = "-".to_string();
@@ -247,16 +384,40 @@ impl ScanResult {
                 None => "-".to_string(),
             };
 
+            // Apply custom styling based on port state
+            let port_display = if result.is_open {
+                result.port.to_string().on_green().black().bold()
+            } else if is_open_filtered {
+                result.port.to_string().on_yellow().black().bold()
+            } else {
+                result.port.to_string().on_red().black()
+            };
+
+            // Apply custom styling to service based on state
+            let service_display = if result.is_open {
+                service.bright_white()
+            } else if is_open_filtered {
+                service.bright_white()
+            } else {
+                service.normal()
+            };
+
             println!(
-                "{:6} {:10} {:20} {:20} {:10}",
-                result.port.to_string(),
+                "{} {:^6} {:10} {:20} {:20} {:10} {}",
+                "║".blue().bold(),
+                port_display,
                 state,
-                service,
+                service_display,
                 protocol,
-                latency
+                latency,
+                "║".blue().bold()
             );
         }
 
+        println!(
+            "{}",
+            format!("╚{}╝", "═".repeat(box_width - 2)).blue().bold()
+        );
         println!();
     }
 }
