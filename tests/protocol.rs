@@ -20,6 +20,6 @@ fn test_detect_service() {
             .detect_service(&mut stream, Protocol::Tcp)
             .await
             .unwrap();
-        assert_eq!(service, Some("HTTP".to_string()));
+        assert_eq!(service, Some("HTTP/1.1".to_string()));
     });
 }

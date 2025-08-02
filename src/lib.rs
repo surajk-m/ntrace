@@ -8,9 +8,10 @@ pub mod error;
 pub mod output;
 pub mod protocol;
 pub mod scanner;
+pub mod services;
 
 pub use cli::Cli;
 pub use error::NtraceError;
 pub use output::ScanResult;
-pub use protocol::Protocol;
-pub use scanner::Scanner;
+pub use protocol::{Protocol, ProtocolAnalyzer};
+pub use scanner::{PortResult, ScanConfig, Scanner};
