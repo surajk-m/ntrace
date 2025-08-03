@@ -1,4 +1,5 @@
 use crate::scanner::PortResult;
+use crate::traceroute::TraceResult;
 use colored::Colorize;
 use serde::Serialize;
 use std::fs::File;
@@ -419,5 +420,444 @@ impl ScanResult {
             format!("╚{}╝", "═".repeat(box_width - 2)).blue().bold()
         );
         println!();
+    }
+}
+
+/// Extension methods for TraceResult to handle output formatting
+pub trait TraceResultOutput {
+    /// Print the trace result in standard format
+    fn print(&self);
+
+    /// Print the trace result in table format
+    fn print_table(&self);
+
+    /// Print the trace result with route path information
+    fn print_route_path(&self);
+
+    /// Save the trace result to a JSON file
+    fn to_json_file(&self, path: &str) -> Result<(), std::io::Error>;
+
+    /// Save the trace result to a text file
+    fn to_text_file(&self, path: &str) -> Result<(), std::io::Error>;
+}
+
+impl TraceResultOutput for TraceResult {
+    fn print(&self) {
+        let box_width = 70;
+        println!(
+            "\n{}",
+            format!("╔{}╗", "═".repeat(box_width - 2)).blue().bold()
+        );
+        println!(
+            "{} {} {}",
+            "║".blue().bold(),
+            " TRACEROUTE RESULTS ".on_bright_blue().white().bold(),
+            "║".blue().bold()
+        );
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Target info
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Target".bold(),
+            self.target.bright_white(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Protocol".bold(),
+            self.protocol.bright_white(),
+            "║".blue().bold()
+        );
+
+        if let Some(port) = self.port {
+            println!(
+                "{} {}: {} {}",
+                "║".blue().bold(),
+                "Port".bold(),
+                port.to_string().bright_white(),
+                "║".blue().bold()
+            );
+        }
+
+        println!(
+            "{} {}: {:.2} seconds {}",
+            "║".blue().bold(),
+            "Duration".bold(),
+            self.duration.as_secs_f64(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Hops".bold(),
+            self.hops.len().to_string().bright_white(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{} {}: {} {}",
+            "║".blue().bold(),
+            "Destination Reached".bold(),
+            if self.reached_destination {
+                "Yes".green().bold()
+            } else {
+                "No".red().bold()
+            },
+            "║".blue().bold()
+        );
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Print header
+        println!(
+            "{} {:^4} {:^15} {:^25} {:^10} {}",
+            "║".blue().bold(),
+            "HOP".bold(),
+            "IP".bold(),
+            "HOSTNAME".bold(),
+            "LATENCY".bold(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Print hops
+        for hop in &self.hops {
+            let hop_num = hop.hop.to_string().bold();
+
+            let ip = match &hop.ip {
+                Some(ip) => ip.bright_white(),
+                None => "*".red().bold(),
+            };
+
+            let hostname = match &hop.hostname {
+                Some(hostname) => hostname.bright_green(),
+                None => "-".normal(),
+            };
+
+            let latency = match hop.avg_latency {
+                Some(duration) => format!("{:.2}ms", duration.as_secs_f64() * 1000.0).normal(),
+                None => "*".red().bold(),
+            };
+
+            // Highlight the destination
+            let (prefix, suffix) = if hop.is_destination {
+                (
+                    format!("{} ", "→".bright_green().bold()),
+                    format!(" {}", "←".bright_green().bold()),
+                )
+            } else {
+                ("  ".to_string(), "  ".to_string())
+            };
+
+            println!(
+                "{} {:>4} {}{:^15}{} {:^25} {:^10} {}",
+                "║".blue().bold(),
+                hop_num,
+                prefix,
+                ip,
+                suffix,
+                hostname,
+                latency,
+                "║".blue().bold()
+            );
+        }
+
+        println!(
+            "{}",
+            format!("╚{}╝", "═".repeat(box_width - 2)).blue().bold()
+        );
+        println!();
+    }
+
+    fn print_table(&self) {
+        let box_width = 80;
+        println!(
+            "\n{}",
+            format!("╔{}╗", "═".repeat(box_width - 2)).blue().bold()
+        );
+        println!(
+            "{} {} {}",
+            "║".blue().bold(),
+            " TRACEROUTE TABLE ".on_bright_blue().white().bold(),
+            "║".blue().bold()
+        );
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Target info
+        println!(
+            "{} {}: {} | {}: {} | {}: {}{}",
+            "║".blue().bold(),
+            "Target".bold(),
+            self.target.bright_white(),
+            "Protocol".bold(),
+            self.protocol.bright_white(),
+            "Duration".bold(),
+            format!("{:.2}s", self.duration.as_secs_f64()).bright_white(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Print header
+        println!(
+            "{} {:^4} {:^15} {:^25} {:^30} {}",
+            "║".blue().bold(),
+            "HOP".bold(),
+            "IP".bold(),
+            "HOSTNAME".bold(),
+            "LATENCY (ms)".bold(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Print hops
+        for hop in &self.hops {
+            let hop_num = hop.hop.to_string().bold();
+
+            let ip = match &hop.ip {
+                Some(ip) => ip.bright_white(),
+                None => "*".red().bold(),
+            };
+
+            let hostname = match &hop.hostname {
+                Some(hostname) => hostname.bright_green(),
+                None => "-".normal(),
+            };
+
+            // Format latencies in a table like structure
+            let mut latency_str = String::new();
+            for (i, latency) in hop.latencies.iter().enumerate() {
+                if i > 0 {
+                    latency_str.push_str("  ");
+                }
+                match latency {
+                    Some(duration) => {
+                        latency_str.push_str(&format!("{:.2}", duration.as_secs_f64() * 1000.0));
+                    }
+                    None => {
+                        latency_str.push_str("*");
+                    }
+                }
+            }
+            let latency_display = latency_str.normal();
+
+            // Highlight the destination
+            let (prefix, suffix) = if hop.is_destination {
+                (
+                    format!("{} ", "→".bright_green().bold()),
+                    format!(" {}", "←".bright_green().bold()),
+                )
+            } else {
+                ("  ".to_string(), "  ".to_string())
+            };
+
+            println!(
+                "{} {:>4} {}{:^15}{} {:^25} {:^30} {}",
+                "║".blue().bold(),
+                hop_num,
+                prefix,
+                ip,
+                suffix,
+                hostname,
+                latency_display,
+                "║".blue().bold()
+            );
+        }
+
+        println!(
+            "{}",
+            format!("╚{}╝", "═".repeat(box_width - 2)).blue().bold()
+        );
+        println!();
+    }
+
+    fn print_route_path(&self) {
+        let box_width = 80;
+        println!(
+            "\n{}",
+            format!("╔{}╗", "═".repeat(box_width - 2)).blue().bold()
+        );
+        println!(
+            "{} {} {}",
+            "║".blue().bold(),
+            " ROUTE PATH ".on_bright_blue().white().bold(),
+            "║".blue().bold()
+        );
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Target info
+        println!(
+            "{} {}: {} | {}: {} {}",
+            "║".blue().bold(),
+            "Target".bold(),
+            self.target.bright_white(),
+            "Protocol".bold(),
+            self.protocol.bright_white(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Print header
+        println!(
+            "{} {:^4} {:^15} {:^20} {:^15} {:^15} {}",
+            "║".blue().bold(),
+            "HOP".bold(),
+            "IP".bold(),
+            "HOSTNAME".bold(),
+            "ASN".bold(),
+            "LOCATION".bold(),
+            "║".blue().bold()
+        );
+
+        println!(
+            "{}",
+            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+        );
+
+        // Print hops with route path info
+        for hop in &self.hops {
+            let hop_num = hop.hop.to_string().bold();
+
+            let ip = match &hop.ip {
+                Some(ip) => ip.bright_white(),
+                None => "*".red().bold(),
+            };
+
+            let hostname = match &hop.hostname {
+                Some(hostname) => {
+                    if hostname.len() > 20 {
+                        format!("{}...", &hostname[0..17]).bright_green()
+                    } else {
+                        hostname.bright_green()
+                    }
+                }
+                None => "-".normal(),
+            };
+
+            let asn = match &hop.asn {
+                Some(asn) => asn.yellow().bold(),
+                None => "-".normal(),
+            };
+
+            let location = match &hop.location {
+                Some(location) => location.cyan().bold(),
+                None => "-".normal(),
+            };
+
+            // Highlight the destination
+            let (prefix, suffix) = if hop.is_destination {
+                (
+                    format!("{} ", "→".bright_green().bold()),
+                    format!(" {}", "←".bright_green().bold()),
+                )
+            } else {
+                ("  ".to_string(), "  ".to_string())
+            };
+
+            println!(
+                "{} {:>4} {}{:^15}{} {:^20} {:^15} {:^15} {}",
+                "║".blue().bold(),
+                hop_num,
+                prefix,
+                ip,
+                suffix,
+                hostname,
+                asn,
+                location,
+                "║".blue().bold()
+            );
+        }
+
+        println!(
+            "{}",
+            format!("╚{}╝", "═".repeat(box_width - 2)).blue().bold()
+        );
+        println!();
+    }
+
+    fn to_json_file(&self, path: &str) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string_pretty(self)?;
+        let mut file = File::create(path)?;
+        file.write_all(json.as_bytes())?;
+        println!("Trace results saved to {}", path);
+        Ok(())
+    }
+
+    fn to_text_file(&self, path: &str) -> Result<(), std::io::Error> {
+        let mut file = File::create(path)?;
+
+        // Write header
+        writeln!(file, "Traceroute to {} ({})", self.target, self.protocol)?;
+        if let Some(port) = self.port {
+            writeln!(file, "Port: {}", port)?;
+        }
+        writeln!(file, "Duration: {:.2} seconds", self.duration.as_secs_f64())?;
+        writeln!(file, "Destination reached: {}", self.reached_destination)?;
+        writeln!(file)?;
+
+        // Write hop information
+        writeln!(
+            file,
+            "{:<4} {:<15} {:<25} {:<10}",
+            "HOP", "IP", "HOSTNAME", "LATENCY"
+        )?;
+        writeln!(file, "{}", "-".repeat(60))?;
+
+        for hop in &self.hops {
+            let ip = hop.ip.as_deref().unwrap_or("*");
+            let hostname = hop.hostname.as_deref().unwrap_or("-");
+
+            let latency = match hop.avg_latency {
+                Some(duration) => format!("{:.2}ms", duration.as_secs_f64() * 1000.0),
+                None => "*".to_string(),
+            };
+
+            let destination_marker = if hop.is_destination {
+                " (destination)"
+            } else {
+                ""
+            };
+
+            writeln!(
+                file,
+                "{:<4} {:<15} {:<25} {:<10}{}",
+                hop.hop, ip, hostname, latency, destination_marker
+            )?;
+        }
+
+        println!("Trace results saved to {}", path);
+        Ok(())
     }
 }

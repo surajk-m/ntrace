@@ -10,6 +10,7 @@ use tokio::time::timeout;
 pub enum Protocol {
     Tcp,
     Udp,
+    Icmp,
     // Add more protocols
 }
 
@@ -92,6 +93,11 @@ impl ProtocolAnalyzer {
                 }
 
                 Ok(None)
+            }
+            Protocol::Icmp => {
+                // ICMP doesn't have services in the traditional sense
+                // but we can identify the ICMP type
+                Ok(Some("icmp".to_string()))
             }
         }
     }
@@ -214,6 +220,10 @@ impl ProtocolAnalyzer {
                     1194 => self.analyze_openvpn().await,
                     _ => Ok(Some("UDP".to_string())),
                 }
+            }
+            Protocol::Icmp => {
+                // For ICMP, we just return the protocol type
+                Ok(Some("ICMP".to_string()))
             }
         }
     }

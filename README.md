@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A fast and secure network port scanner and protocol analyzer written in Rust.
+A fast network port scanner, protocol analyzer, and traceroute utility written in Rust.
 
 ## Features
 
@@ -12,6 +12,7 @@ A fast and secure network port scanner and protocol analyzer written in Rust.
   - Active probing
   - Well known port database
 - **Protocol Analysis**: Detects and analyzes protocols (HTTP, TLS, SSH, etc.)
+- **Traceroute**: Trace the network path to a target using various protocols (ICMP, TCP, UDP)
 - **Multiple Output Formats**: JSON and CSV output for integration with other tools
 - **Hostname Resolution**: Supports both IP addresses and hostnames as targets
 - **Flexible Port Selection**: Scan specific ports, ranges, or use predefined groups (common, well known, all)
@@ -34,6 +35,83 @@ cargo build --release
 
 The binary will be available at `target/release/ntrace`.
 
+### Using the Built Binary
+
+After building the binary, you can use it directly:
+
+```bash
+# Port scanning
+./target/release/ntrace -H wikipedia.org -p 80,443,8080
+
+# Traceroute (requires sudo for ICMP)
+sudo ./target/release/ntrace trace wikipedia.org
+
+# UDP port scanning
+./target/release/ntrace -H 192.168.1.1 -P udp -p 53,123,161 -v
+```
+
+You can also move the binary to a directory in your PATH for easier access:
+
+```bash
+# On Linux/macOS
+sudo cp ./target/release/ntrace /usr/local/bin/
+ntrace -h 
+
+# On Windows (PowerShell with Administrator privileges)
+Copy-Item .\target\release\ntrace.exe -Destination "C:\Windows\System32\"
+ntrace -h
+```
+
+### Platform Specific Examples
+
+#### Linux
+```bash
+# Full port scan with service detection
+./target/release/ntrace -H scanme.nmap.org -p well-known --service-detection
+
+# Fast traceroute with table output
+sudo ./target/release/ntrace trace cloudflare.com --table
+```
+
+#### Windows
+```bash
+# Scan a local network device
+.\target\release\ntrace.exe -H 192.168.1.1 -p common
+
+# TCP traceroute (works without admin privileges)
+.\target\release\ntrace.exe trace microsoft.com --tcp
+```
+
+#### macOS
+```bash
+# Scan multiple ports with JSON output
+./target/release/ntrace -H apple.com -p 80,443,8080 -o results.json
+
+# ICMP traceroute with maximum 20 hops
+sudo ./target/release/ntrace trace github.com --max-hops 20
+```
+
+### Advanced Command Examples
+
+Here are some more advanced examples that combine multiple features:
+
+```bash
+# Comprehensive network analysis: port scan followed by traceroute to open ports
+./target/release/ntrace -H wikipedia.org -p 80,443 -v
+sudo ./target/release/ntrace trace wikipedia.org --port 80 --table
+
+# Security audit: scan all well-known ports with aggressive service detection
+./target/release/ntrace -H target-server.com -p well-known --aggressive --service-detection
+
+# Network troubleshooting: compare TCP and ICMP traceroute results
+./target/release/ntrace trace problem-server.com --tcp --port 443 -o tcp-trace.json
+sudo ./target/release/ntrace trace problem-server.com -o icmp-trace.json
+
+# Performance testing: scan with different batch sizes and compare
+time ./target/release/ntrace -H performance-test.com -p 1-1000 --batch-size 50
+time ./target/release/ntrace -H performance-test.com -p 1-1000 --batch-size 200
+```
+
 ## Usage
 
 ### Basic Usage
@@ -51,6 +129,33 @@ ntrace -H 192.168.1.1 -p 1-100
 # Scan common ports
 ntrace -H 192.168.1.1 -p common
 ```
+
+### Traceroute Usage
+
+```bash
+# Basic ICMP traceroute (requires sudo/root privileges)
+sudo ntrace trace google.com
+
+# TCP traceroute (can work without sudo for basic functionality)
+ntrace trace google.com --tcp
+
+# UDP traceroute
+sudo ntrace trace google.com --udp
+
+# Specify maximum hops
+sudo ntrace trace google.com --max-hops 15
+
+# Specify port for TCP/UDP traceroute
+ntrace trace google.com --tcp --port 443
+
+# Output trace results as table
+sudo ntrace trace google.com --table
+
+# Save trace results to a file
+sudo ntrace trace google.com --output trace-results.json
+```
+
+> **Note about privileges**: The ICMP traceroute requires root/sudo privileges to create raw sockets. TCP traceroute can work without sudo but may only show the final destination rather than intermediate hops.
 
 ### Advanced Options
 
@@ -120,6 +225,60 @@ PORT    STATE   SERVICE         PROTOCOL    LATENCY
 443     open    https           TLS/SSL     125.1ms
 
 Summary: 2 open ports, 18 closed ports out of 20 scanned
+```
+
+### Traceroute Example
+
+Trace the network path to Google using ICMP:
+
+```bash
+sudo ntrace trace google.com
+```
+
+Output:
+```
+╔══════════════════════════════════════════════════════════╗
+║                                                          ║
+║   _   _ _____                                            ║
+║  | \ | |_   _| __ __ _  ___ ___                          ║
+║  |  \| | | || '__/ _` |/ __/ _ \                         ║
+║  | |\  | | || | | (_| | (_|  __/                         ║
+║  |_| \_| |_||_|  \__,_|\___\___|                         ║
+║                                                          ║
+║  Traceroute & Network Path Analyzer v0.1.3               ║
+║                                                          ║
+╚══════════════════════════════════════════════════════════╝
+
+Starting traceroute to google.com using Icmp...
+
+╔════════════════════════════════════════════════════════════════════╗
+║  TRACEROUTE RESULTS                                                ║
+╠════════════════════════════════════════════════════════════════════╣
+║ Target: google.com                                                 ║
+║ Protocol: Icmp                                                     ║
+║ Duration: 15.77 seconds                                            ║
+║ Hops: 16                                                           ║
+║ Destination Reached: Yes                                           ║
+╠════════════════════════════════════════════════════════════════════╣
+║ HOP        IP                HOSTNAME           LATENCY            ║
+╠════════════════════════════════════════════════════════════════════╣
+║    1     172.21.96.1                 -               0.44ms        ║
+║    2    192.168.29.1                 -               3.19ms        ║
+║    3     10.50.144.1                 -               5.26ms        ║
+║    4    172.31.5.101                 -               4.87ms        ║
+║    5   192.168.86.238                -               3.96ms        ║
+║    6    172.26.104.52                -               3.99ms        ║
+║    7   172.26.104.146                -               8.50ms        ║
+║    8    192.168.85.56                -               5.13ms        ║
+║    9          *                      -                 *           ║
+║   10          *                      -                 *           ║
+║   11          *                      -                 *           ║
+║   12          *                      -                 *           ║
+║   13    173.194.121.8                -              34.54ms        ║
+║   14   192.178.110.227               -              33.98ms        ║
+║   15    72.14.233.59                 -              33.37ms        ║
+║   16 → 142.250.183.110 ←             -              35.66ms        ║
+╚════════════════════════════════════════════════════════════════════╝
 ```
 
 ### Comprehensive Web Server Analysis
