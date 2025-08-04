@@ -46,6 +46,12 @@ After building the binary, you can use it directly:
 # Traceroute (requires sudo for ICMP)
 sudo ./target/release/ntrace trace wikipedia.org
 
+# Set the CAP_NET_RAW capability on the binary
+sudo setcap cap_net_raw+ep /path/to/ntrace
+
+# Now you can run ICMP traceroute without sudo
+./target/release/ntrace trace wikipedia.org
+
 # UDP port scanning
 ./target/release/ntrace -H 192.168.1.1 -P udp -p 53,123,161 -v
 ```
@@ -65,6 +71,13 @@ ntrace -h
 ### Platform Specific Examples
 
 #### Linux
+```bash
+# Set the CAP_NET_RAW capability on the binary
+sudo setcap cap_net_raw+ep ~/.cargo/bin/ntrace
+
+# Now you can run ICMP traceroute without sudo
+ntrace trace google.com
+```
 ```bash
 # Full port scan with service detection
 ./target/release/ntrace -H scanme.nmap.org -p well-known --service-detection
