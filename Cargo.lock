@@ -1011,6 +1011,7 @@ dependencies = [
  "once_cell",
  "pnet",
  "rand 0.9.2",
+ "regex",
  "rustls",
  "serde",
  "serde_json",

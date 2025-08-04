@@ -10,6 +10,7 @@
 /// - **Service Detection**: Identifies services running on open ports
 /// - **Protocol Analysis**: Detects and analyzes common protocols
 /// - **Flexible Port Selection**: Scan specific ports, ranges, or use predefined groups
+/// - **Traceroute**: Trace the route packets take to a host with TCP, UDP, or ICMP
 ///
 /// ## Example
 ///
@@ -63,6 +64,7 @@ pub mod output;
 pub mod protocol;
 pub mod scanner;
 pub mod services;
+pub mod traceroute;
 
 /// Command line interface for ntrace
 pub use cli::Cli;
@@ -72,3 +74,5 @@ pub use output::ScanResult;
 pub use protocol::{Protocol, ProtocolAnalyzer, Target};
 /// Core scanner functionality
 pub use scanner::{PortResult, ScanConfig, Scanner};
+/// Traceroute functionality
+pub use traceroute::{TraceConfig, TraceResult, Tracer};

@@ -7,7 +7,7 @@ fn test_cli_parsing() {
     let args = vec!["ntrace", "-H", "192.168.1.1"];
     let cli = Cli::parse_from(args);
 
-    assert_eq!(cli.host, "192.168.1.1");
+    assert_eq!(cli.host, Some("192.168.1.1".to_string()));
     assert_eq!(cli.ports, "1-1000");
     assert_eq!(cli.protocol, "tcp");
     assert_eq!(cli.timeout, 2.0);
@@ -39,7 +39,7 @@ fn test_cli_with_options() {
     ];
     let cli = Cli::parse_from(args);
 
-    assert_eq!(cli.host, "example.com");
+    assert_eq!(cli.host, Some("example.com".to_string()));
     assert_eq!(cli.ports, "80,443");
     assert_eq!(cli.protocol, "tcp");
     assert_eq!(cli.timeout, 5.0);

@@ -53,6 +53,21 @@ pub enum NtraceError {
 
     #[error("TLS error: {0}")]
     TlsError(String),
+
+    #[error("ICMP error: {0}")]
+    IcmpError(String),
+
+    #[error("Permission denied: {0}")]
+    PermissionDenied2(String),
+
+    #[error("Socket configuration error: {0}")]
+    SocketConfigError(String),
+
+    #[error("Network congestion detected")]
+    NetworkCongestion,
+
+    #[error("Malformed packet received: {0}")]
+    MalformedPacket(String),
 }
 
 /// Determines if an error is recoverable and worth retrying
@@ -69,6 +84,11 @@ pub fn is_recoverable_error(err: &NtraceError) -> bool {
         }
         NtraceError::Timeout(_) => true,
         NtraceError::RateLimitExceeded => true,
+        NtraceError::NetworkCongestion => true,
+        // Some ICMP errors are transient
+        NtraceError::IcmpError(_) => true,
+        // Might be a temporary issue
+        NtraceError::MalformedPacket(_) => true,
         _ => false,
     }
 }

@@ -907,6 +907,77 @@ impl Scanner {
                     }
                 }
             }
+            Protocol::Icmp => {
+                // For ICMP, we'll use a simple ping to check if the host responds
+                let socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
+                    Ok(s) => {
+                        // Set timeouts
+                        if let Err(e) = s.set_read_timeout(Some(Duration::from_millis(500))) {
+                            debug!("Failed to set read timeout: {}", e);
+                            return Ok(PortResult {
+                                port,
+                                is_open: false,
+                                service: None,
+                                protocol_info: Some("ICMP (error)".to_string()),
+                                latency: None,
+                                scan_time: chrono::Utc::now(),
+                                resolved_ip: None,
+                            });
+                        }
+                        s
+                    }
+                    Err(e) => {
+                        debug!("Failed to create socket: {}", e);
+                        return Ok(PortResult {
+                            port,
+                            is_open: false,
+                            service: None,
+                            protocol_info: Some("ICMP (error)".to_string()),
+                            latency: None,
+                            scan_time: chrono::Utc::now(),
+                            resolved_ip: None,
+                        });
+                    }
+                };
+
+                // For ICMP, we'll use a UDP socket to an unlikely port which should
+                // trigger an ICMP "port unreachable" response if the host is up
+                let start_time = Instant::now();
+
+                // Send a packet to an unlikely port
+                let target = SocketAddr::new(ip, 33434);
+                let data = [0u8; 32];
+
+                if let Err(e) = socket.send_to(&data, target) {
+                    debug!("Failed to send ICMP probe: {}", e);
+                    return Ok(PortResult {
+                        port,
+                        is_open: false,
+                        service: None,
+                        protocol_info: Some("ICMP (error)".to_string()),
+                        latency: None,
+                        scan_time: chrono::Utc::now(),
+                        resolved_ip: None,
+                    });
+                }
+
+                // Wait for response
+                let mut buf = [0u8; 1024];
+                match socket.recv_from(&mut buf) {
+                    Ok(_) => {
+                        // If we get a response, the host is up
+                        is_open = true;
+                        latency = Some(start_time.elapsed());
+                        service = Some("icmp".to_string());
+                        protocol_info = Some("ICMP".to_string());
+                    }
+                    Err(e) => {
+                        // No response - host might be down or filtering ICMP
+                        debug!("No ICMP response: {}", e);
+                        protocol_info = Some("ICMP (no response)".to_string());
+                    }
+                }
+            }
         }
 
         // Include resolved IP information for domain targets
