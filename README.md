@@ -134,25 +134,25 @@ ntrace -H 192.168.1.1 -p common
 
 ```bash
 # Basic ICMP traceroute (requires sudo/root privileges)
-sudo ntrace trace google.com
+sudo ~/.cargo/bin/ntrace trace google.com
 
 # TCP traceroute (can work without sudo for basic functionality)
 ntrace trace google.com --tcp
 
 # UDP traceroute
-sudo ntrace trace google.com --udp
+sudo ~/.cargo/bin/ntrace trace google.com --udp
 
 # Specify maximum hops
-sudo ntrace trace google.com --max-hops 15
+sudo ~/.cargo/bin/ntrace trace google.com --max-hops 15
 
 # Specify port for TCP/UDP traceroute
 ntrace trace google.com --tcp --port 443
 
 # Output trace results as table
-sudo ntrace trace google.com --table
+sudo ~/.cargo/bin/ntrace trace google.com --table
 
 # Save trace results to a file
-sudo ntrace trace google.com --output trace-results.json
+sudo ~/.cargo/bin/ntrace trace google.com --output trace-results.json
 ```
 
 > **Note about privileges**: The ICMP traceroute requires root/sudo privileges to create raw sockets. TCP traceroute can work without sudo but may only show the final destination rather than intermediate hops.
@@ -232,7 +232,7 @@ Summary: 2 open ports, 18 closed ports out of 20 scanned
 Trace the network path to Google using ICMP:
 
 ```bash
-sudo ntrace trace google.com
+sudo ~/.cargo/bin/ntrace trace google.com
 ```
 
 Output:
