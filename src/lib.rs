@@ -58,6 +58,7 @@
 ///     Ok(())
 /// }
 /// ```
+pub mod capability;
 pub mod cli;
 pub mod error;
 pub mod output;
@@ -66,6 +67,7 @@ pub mod scanner;
 pub mod services;
 pub mod traceroute;
 
+pub use capability::{ensure_cap_net_raw, has_cap_net_raw, try_set_cap_net_raw};
 /// Command line interface for ntrace
 pub use cli::Cli;
 pub use error::NtraceError;

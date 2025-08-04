@@ -199,7 +199,7 @@ fn print_banner() {
     println!(
         "{} {} {}",
         "║".blue().bold(),
-        " Network Port Scanner & Protocol Analyzer v0.1.4 "
+        " Network Port Scanner & Protocol Analyzer v0.1.5 "
             .on_bright_blue()
             .white()
             .bold(),
@@ -269,7 +269,7 @@ fn print_trace_banner() {
     println!(
         "{} {} {}",
         "║".blue().bold(),
-        " Traceroute & Network Protocol Analyzer v0.1.4 "
+        " Traceroute & Network Protocol Analyzer v0.1.5 "
             .on_bright_blue()
             .white()
             .bold(),

@@ -443,144 +443,65 @@ pub trait TraceResultOutput {
 
 impl TraceResultOutput for TraceResult {
     fn print(&self) {
-        let box_width = 70;
-        println!(
-            "\n{}",
-            format!("╔{}╗", "═".repeat(box_width - 2)).blue().bold()
-        );
-        println!(
-            "{} {} {}",
-            "║".blue().bold(),
-            " TRACEROUTE RESULTS ".on_bright_blue().white().bold(),
-            "║".blue().bold()
-        );
-        println!(
-            "{}",
-            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
-        );
-
-        // Target info
-        println!(
-            "{} {}: {} {}",
-            "║".blue().bold(),
-            "Target".bold(),
-            self.target.bright_white(),
-            "║".blue().bold()
-        );
-
-        println!(
-            "{} {}: {} {}",
-            "║".blue().bold(),
-            "Protocol".bold(),
-            self.protocol.bright_white(),
-            "║".blue().bold()
-        );
-
-        if let Some(port) = self.port {
-            println!(
-                "{} {}: {} {}",
-                "║".blue().bold(),
-                "Port".bold(),
-                port.to_string().bright_white(),
-                "║".blue().bold()
-            );
-        }
-
-        println!(
-            "{} {}: {:.2} seconds {}",
-            "║".blue().bold(),
-            "Duration".bold(),
-            self.duration.as_secs_f64(),
-            "║".blue().bold()
-        );
-
-        println!(
-            "{} {}: {} {}",
-            "║".blue().bold(),
-            "Hops".bold(),
-            self.hops.len().to_string().bright_white(),
-            "║".blue().bold()
-        );
-
-        println!(
-            "{} {}: {} {}",
-            "║".blue().bold(),
-            "Destination Reached".bold(),
-            if self.reached_destination {
-                "Yes".green().bold()
-            } else {
-                "No".red().bold()
-            },
-            "║".blue().bold()
-        );
-
-        println!(
-            "{}",
-            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
-        );
+        // Classic traceroute output format
+        let max_hops = self.hops.last().map_or(0, |hop| hop.hop);
 
         // Print header
         println!(
-            "{} {:^4} {:^15} {:^25} {:^10} {}",
-            "║".blue().bold(),
-            "HOP".bold(),
-            "IP".bold(),
-            "HOSTNAME".bold(),
-            "LATENCY".bold(),
-            "║".blue().bold()
-        );
-
-        println!(
-            "{}",
-            format!("╠{}╣", "═".repeat(box_width - 2)).blue().bold()
+            "traceroute to {}, {} hops max",
+            self.target.bright_white(),
+            max_hops
         );
 
         // Print hops
         for hop in &self.hops {
-            let hop_num = hop.hop.to_string().bold();
+            // Format hop number with 3 spaces
+            let hop_num = format!("{:2}", hop.hop);
 
-            let ip = match &hop.ip {
-                Some(ip) => ip.bright_white(),
+            // Get the IP or asterisk for timeout
+            let ip_display = match &hop.ip {
+                Some(ip) => {
+                    // If we have a hostname, display it instead of IP
+                    if let Some(hostname) = &hop.hostname {
+                        hostname.bright_green()
+                    } else {
+                        ip.bright_white()
+                    }
+                }
                 None => "*".red().bold(),
             };
 
-            let hostname = match &hop.hostname {
-                Some(hostname) => hostname.bright_green(),
-                None => "-".normal(),
-            };
+            // Format latencies
+            let latencies = hop
+                .latencies
+                .iter()
+                .map(|latency| match latency {
+                    Some(duration) => format!("{:.3}ms", duration.as_secs_f64() * 1000.0).normal(),
+                    None => "*".red().bold(),
+                })
+                .collect::<Vec<_>>();
 
-            let latency = match hop.avg_latency {
-                Some(duration) => format!("{:.2}ms", duration.as_secs_f64() * 1000.0).normal(),
-                None => "*".red().bold(),
-            };
+            // Ensure we have exactly 3 latencies (padding with * if needed)
+            let mut formatted_latencies = Vec::new();
+            for i in 0..3 {
+                if i < latencies.len() {
+                    formatted_latencies.push(latencies[i].clone());
+                } else {
+                    formatted_latencies.push("*".red().bold());
+                }
+            }
 
-            // Highlight the destination
-            let (prefix, suffix) = if hop.is_destination {
-                (
-                    format!("{} ", "→".bright_green().bold()),
-                    format!(" {}", "←".bright_green().bold()),
-                )
-            } else {
-                ("  ".to_string(), "  ".to_string())
-            };
-
+            // Print the line
             println!(
-                "{} {:>4} {}{:^15}{} {:^25} {:^10} {}",
-                "║".blue().bold(),
-                hop_num,
-                prefix,
-                ip,
-                suffix,
-                hostname,
-                latency,
-                "║".blue().bold()
+                "  {}   {}  {}  {}  {}",
+                hop_num.bold(),
+                ip_display,
+                formatted_latencies[0],
+                formatted_latencies[1],
+                formatted_latencies[2]
             );
         }
 
-        println!(
-            "{}",
-            format!("╚{}╝", "═".repeat(box_width - 2)).blue().bold()
-        );
         println!();
     }
 

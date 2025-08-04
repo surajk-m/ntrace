@@ -1,6 +1,6 @@
 [package]
 name = "ntrace"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 authors = ["Suraj <suraj410401@gmail.com>"]
 description = "A fast and secure network port scanner and protocol analyzer"
@@ -9,6 +9,7 @@ license = "MIT"
 keywords = ["network", "security", "scanner", "port-scanner", "protocol-analyzer"]
 categories = ["command-line-utilities", "network-programming"]
 readme = "README.md"
+build = "build.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

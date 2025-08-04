@@ -43,14 +43,12 @@ After building the binary, you can use it directly:
 # Port scanning
 ./target/release/ntrace -H wikipedia.org -p 80,443,8080
 
-# Traceroute (requires sudo for ICMP)
-sudo ./target/release/ntrace trace wikipedia.org
-
-# Set the CAP_NET_RAW capability on the binary
-sudo setcap cap_net_raw+ep /path/to/ntrace
-
-# Now you can run ICMP traceroute without sudo
+# Traceroute will automatically handle permissions for ICMP
 ./target/release/ntrace trace wikipedia.org
+
+# The tool will automatically request sudo access to set CAP_NET_RAW capability if needed
+# Or you can manually set the capability:
+sudo setcap cap_net_raw+ep /path/to/ntrace
 
 # UDP port scanning
 ./target/release/ntrace -H 192.168.1.1 -P udp -p 53,123,161 -v
@@ -72,10 +70,8 @@ ntrace -h
 
 #### Linux
 ```bash
-# Set the CAP_NET_RAW capability on the binary
+# How to manually set CAP_NET_RAW capability on the binary
 sudo setcap cap_net_raw+ep ~/.cargo/bin/ntrace
-
-# Now you can run ICMP traceroute without sudo
 ntrace trace google.com
 ```
 ```bash
@@ -83,7 +79,7 @@ ntrace trace google.com
 ./target/release/ntrace -H scanme.nmap.org -p well-known --service-detection
 
 # Fast traceroute with table output
-sudo ./target/release/ntrace trace cloudflare.com --table
+./target/release/ntrace trace cloudflare.com --table
 ```
 
 #### Windows
@@ -91,7 +87,7 @@ sudo ./target/release/ntrace trace cloudflare.com --table
 # Scan a local network device
 .\target\release\ntrace.exe -H 192.168.1.1 -p common
 
-# TCP traceroute (works without admin privileges)
+# TCP traceroute
 .\target\release\ntrace.exe trace microsoft.com --tcp
 ```
 
@@ -101,7 +97,7 @@ sudo ./target/release/ntrace trace cloudflare.com --table
 ./target/release/ntrace -H apple.com -p 80,443,8080 -o results.json
 
 # ICMP traceroute with maximum 20 hops
-sudo ./target/release/ntrace trace github.com --max-hops 20
+./target/release/ntrace trace github.com --max-hops 20
 ```
 
 ### Advanced Command Examples
@@ -111,14 +107,14 @@ Here are some more advanced examples that combine multiple features:
 ```bash
 # Comprehensive network analysis: port scan followed by traceroute to open ports
 ./target/release/ntrace -H wikipedia.org -p 80,443 -v
-sudo ./target/release/ntrace trace wikipedia.org --port 80 --table
+./target/release/ntrace trace wikipedia.org --port 80 --table
 
 # Security audit: scan all well-known ports with aggressive service detection
 ./target/release/ntrace -H target-server.com -p well-known --aggressive --service-detection
 
 # Network troubleshooting: compare TCP and ICMP traceroute results
 ./target/release/ntrace trace problem-server.com --tcp --port 443 -o tcp-trace.json
-sudo ./target/release/ntrace trace problem-server.com -o icmp-trace.json
+./target/release/ntrace trace problem-server.com -o icmp-trace.json
 
 # Performance testing: scan with different batch sizes and compare
 time ./target/release/ntrace -H performance-test.com -p 1-1000 --batch-size 50
@@ -147,28 +143,26 @@ ntrace -H 192.168.1.1 -p common
 
 ```bash
 # Basic ICMP traceroute (requires sudo/root privileges)
-sudo ~/.cargo/bin/ntrace trace google.com
+ntrace trace google.com
 
 # TCP traceroute (can work without sudo for basic functionality)
 ntrace trace google.com --tcp
 
 # UDP traceroute
-sudo ~/.cargo/bin/ntrace trace google.com --udp
+ntrace trace google.com --udp
 
 # Specify maximum hops
-sudo ~/.cargo/bin/ntrace trace google.com --max-hops 15
+ntrace trace google.com --max-hops 15
 
 # Specify port for TCP/UDP traceroute
 ntrace trace google.com --tcp --port 443
 
 # Output trace results as table
-sudo ~/.cargo/bin/ntrace trace google.com --table
+ntrace trace google.com --table
 
 # Save trace results to a file
-sudo ~/.cargo/bin/ntrace trace google.com --output trace-results.json
+ntrace trace google.com --output trace-results.json
 ```
-
-> **Note about privileges**: The ICMP traceroute requires root/sudo privileges to create raw sockets. TCP traceroute can work without sudo but may only show the final destination rather than intermediate hops.
 
 ### Advanced Options
 

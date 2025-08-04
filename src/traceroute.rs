@@ -4,10 +4,12 @@ use log::{debug, info, warn};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use trust_dns_resolver::TokioAsyncResolver;
+use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
 /// Configuration for traceroute
 #[derive(Debug, Clone)]
@@ -40,15 +42,21 @@ impl Default for TraceConfig {
     fn default() -> Self {
         Self {
             target: Target::Ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))),
-            protocol: Protocol::Icmp,
-            port: 80,
+            // Default to TCP which doesn't require root privileges
+            protocol: Protocol::Tcp,
+            // Use HTTPS port for better results
+            port: 443,
+            // Standard 30 hops max
             max_hops: 30,
             queries: 3,
-            timeout_ms: 1000,
+            // Shorter timeout for faster results
+            timeout_ms: 500,
             resolve_hostnames: true,
             parallel_requests: 18,
-            send_time_ms: 50,
-            ttl_time_ms: 50,
+            // Shorter delay between packets
+            send_time_ms: 10,
+            // Shorter delay between TTLs
+            ttl_time_ms: 10,
             payload_size: 52,
         }
     }
@@ -93,6 +101,17 @@ pub struct TraceResult {
 }
 
 /// Tracer for performing traceroute operations
+///
+/// The `Tracer` struct is responsible for executing traceroute operations
+/// using the specified configuration. It supports multiple protocols:
+///
+/// - TCP: Works without root privileges on all platforms
+/// - UDP: Requires root privileges on most Unix like systems
+/// - ICMP: Requires root privileges on all platforms
+///
+/// When using protocols that require root privileges, the implementation
+/// will automatically fall back to TCP if the necessary privileges are
+/// not available.
 pub struct Tracer {
     config: TraceConfig,
     /// Statistics and results
@@ -101,6 +120,21 @@ pub struct Tracer {
 
 impl Tracer {
     /// Creates a new tracer with the given configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - The configuration to use for the traceroute operation
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use ntrace::traceroute::{TraceConfig, Tracer};
+    /// use ntrace::protocol::{Protocol, Target};
+    /// use std::net::IpAddr;
+    ///
+    /// let config = TraceConfig::default();
+    /// let tracer = Tracer::new(config);
+    /// ```
     pub fn new(config: TraceConfig) -> Self {
         Self {
             config,
@@ -108,15 +142,72 @@ impl Tracer {
         }
     }
 
-    /// This would use proper reverse DNS lookup
+    /// Perform reverse DNS lookup using trust-dns-resolver
     async fn resolve_hostname(&self, ip: IpAddr) -> Option<String> {
-        // For now, we'll return None as proper DNS resolution requires
-        // additional setup that may not be available in all environments
+        if !self.config.resolve_hostnames {
+            return None;
+        }
+
         debug!("Hostname resolution requested for {}", ip);
-        None
+
+        // Create a new resolver with default configuration
+        let mut opts = ResolverOpts::default();
+        // Set a reasonable timeout for DNS lookups
+        opts.timeout = Duration::from_secs(2);
+        // Enable caching for better performance
+        opts.cache_size = 100;
+
+        // Create the resolver - this returns the resolver directly, not a Result
+        let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), opts);
+
+        // Perform reverse lookup with timeout to prevent hanging
+        let lookup_future = resolver.reverse_lookup(ip);
+        let timeout_duration = Duration::from_millis(self.config.timeout_ms);
+
+        match tokio::time::timeout(timeout_duration, lookup_future).await {
+            Ok(Ok(response)) => {
+                let names: Vec<String> = response.iter().map(|name| name.to_string()).collect();
+
+                if names.is_empty() {
+                    None
+                } else {
+                    Some(names[0].trim_end_matches(".").to_string())
+                }
+            }
+            Ok(Err(e)) => {
+                debug!("Reverse lookup failed for {}: {}", ip, e);
+                None
+            }
+            Err(_) => {
+                debug!("Reverse lookup timed out for {}", ip);
+                None
+            }
+        }
     }
 
     /// Perform a traceroute to the target
+    ///
+    /// This method executes the traceroute operation using the configured protocol.
+    /// If the requested protocol requires root privileges and they are not available,
+    /// it will automatically fall back to TCP traceroute which works without privileges.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing either a `TraceResult` with the traceroute information
+    /// or an `NtraceError` if the operation failed.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use ntrace::traceroute::{TraceConfig, Tracer};
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let mut tracer = Tracer::new(TraceConfig::default());
+    ///     let result = tracer.trace().await.unwrap();
+    ///     println!("Found {} hops to destination", result.hops.len());
+    /// }
+    /// ```
     pub async fn trace(&mut self) -> Result<TraceResult, NtraceError> {
         // Start timing
         let start_time = Instant::now();
@@ -154,28 +245,84 @@ impl Tracer {
         );
 
         // Determine which trace method to use based on protocol
+        // Always use TCP traceroute which doesn't require root privileges
+        // This ensures the tool can be used without sudo
         match self.config.protocol {
             Protocol::Tcp => self.trace_tcp(target_ip).await?,
-            Protocol::Udp => self.trace_udp(target_ip).await?,
-            Protocol::Icmp => {
-                // Try the raw socket implementation first
-                match self.trace_icmp_raw(target_ip).await {
-                    Ok(_) => {}
-                    Err(e) => {
+            Protocol::Udp => {
+                // For UDP, check if we have root privileges or CAP_NET_RAW capability on Unix
+                if !has_root_privileges() && cfg!(target_family = "unix") {
+                    // Try to ensure we have the CAP_NET_RAW capability
+                    use crate::capability::ensure_cap_net_raw;
+
+                    if !ensure_cap_net_raw() {
                         warn!(
-                            "Raw socket ICMP traceroute failed: {}. Trying alternative implementation.",
-                            e
+                            "UDP traceroute requires root privileges or CAP_NET_RAW capability on Unix-like systems"
                         );
-                        // Try the alternative implementation next
-                        match self.trace_icmp_alternative(target_ip).await {
+                        info!("Using TCP traceroute which doesn't require special privileges");
+                        self.trace_tcp(target_ip).await?
+                    } else {
+                        // We should now have the capability, try UDP traceroute
+                        match self.trace_udp(target_ip).await {
                             Ok(_) => {}
-                            Err(e2) => {
+                            Err(e) => {
                                 warn!(
-                                    "Alternative ICMP traceroute failed: {}. Falling back to original implementation.",
-                                    e2
+                                    "UDP traceroute failed: {}. Falling back to TCP traceroute.",
+                                    e
                                 );
-                                self.trace_icmp(target_ip).await?
+                                self.trace_tcp(target_ip).await?
                             }
+                        }
+                    }
+                } else {
+                    match self.trace_udp(target_ip).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!(
+                                "UDP traceroute failed: {}. Falling back to TCP traceroute.",
+                                e
+                            );
+                            self.trace_tcp(target_ip).await?
+                        }
+                    }
+                }
+            }
+            Protocol::Icmp => {
+                // For ICMP, check if we have root privileges or CAP_NET_RAW capability
+                if !has_root_privileges() {
+                    // Try to ensure we have the CAP_NET_RAW capability
+                    use crate::capability::ensure_cap_net_raw;
+
+                    if !ensure_cap_net_raw() {
+                        warn!(
+                            "The selected protocol {:?} requires root privileges or CAP_NET_RAW capability",
+                            self.config.protocol
+                        );
+                        info!("Using TCP traceroute which doesn't require special privileges");
+                        self.trace_tcp(target_ip).await?
+                    } else {
+                        // We should now have the capability, try ICMP traceroute
+                        match self.trace_icmp_raw(target_ip).await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!(
+                                    "Raw socket ICMP traceroute failed: {}. Falling back to TCP traceroute.",
+                                    e
+                                );
+                                self.trace_tcp(target_ip).await?
+                            }
+                        }
+                    }
+                } else {
+                    // ICMP protocol with root privileges - use raw socket implementation
+                    match self.trace_icmp_raw(target_ip).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!(
+                                "Raw socket ICMP traceroute failed: {}. Falling back to TCP traceroute.",
+                                e
+                            );
+                            self.trace_tcp(target_ip).await?
                         }
                     }
                 }
@@ -214,26 +361,47 @@ impl Tracer {
         Ok(trace_result)
     }
 
-    /// Perform a TCP traceroute
+    /// Perform a TCP traceroute (doesn't require root privileges)
+    ///
+    /// This method implements traceroute using TCP connections. It works by:
+    /// 1. Setting the TTL value on outgoing TCP packets
+    /// 2. Attempting to connect to the target
+    /// 3. Analyzing connection errors to determine the router IP addresses
+    ///
+    /// TCP traceroute is the most reliable method for unprivileged users as it
+    /// doesn't require raw socket access.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_ip` - The IP address of the target to trace
+    ///
+    /// # Returns
+    ///
+    /// A `Result` indicating success or failure of the operation
     async fn trace_tcp(&self, target_ip: IpAddr) -> Result<(), NtraceError> {
         // Both IPv4 and IPv6 are supported
 
-        // Create a progress indicator
+        // Create a more informative progress indicator
         let progress = if cfg!(not(test)) {
             use indicatif::{ProgressBar, ProgressStyle};
             let pb = ProgressBar::new(self.config.max_hops as u64);
             pb.set_style(
                 ProgressStyle::default_bar()
-                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops")
+                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops - {msg}")
                     .unwrap()
                     .progress_chars("█▓▒░ "),
             );
+            pb.set_message(format!("Tracing route to {} via TCP", target_ip));
             Some(pb)
         } else {
             None
         };
 
-        // Trace each TTL
+        // Determine if we're using IPv4 or IPv6
+        let _is_ipv6 = matches!(target_ip, IpAddr::V6(_));
+
+        // Trace each TTL - continue until we reach the max_hops or the destination
+        let mut destination_reached = false;
         for ttl in 1..=self.config.max_hops {
             // Create a hop result entry
             let mut hop_result = HopResult {
@@ -256,6 +424,9 @@ impl Tracer {
                 let start_time = Instant::now();
 
                 // Create socket with TTL set
+                let _start_time = Instant::now();
+
+                // Create a TCP socket
                 let socket = match std::net::TcpStream::connect_timeout(
                     &SocketAddr::new(target_ip, self.config.port),
                     Duration::from_millis(self.config.timeout_ms),
@@ -268,8 +439,22 @@ impl Tracer {
                         }
                         s
                     }
-                    Err(_) => {
-                        // Connection failed, try next query
+                    Err(e) => {
+                        // Connection failed, check if it's due to TTL exceeded
+                        if let Some(addr) = Self::extract_router_ip_from_error(&e) {
+                            let latency = start_time.elapsed();
+                            hop_result.latencies[q as usize] = Some(latency);
+                            hop_result.ip = Some(addr.to_string());
+                            responses += 1;
+                            total_latency += latency;
+                        } else {
+                            // Log the specific error for debugging
+                            debug!(
+                                "TCP connection error: {} (errno: {:?})",
+                                e,
+                                e.raw_os_error()
+                            );
+                        }
                         continue;
                     }
                 };
@@ -326,16 +511,30 @@ impl Tracer {
                 results.insert(ttl, hop_result.clone());
             }
 
-            // Update progress
+            // Update progress with more information
             if let Some(pb) = &progress {
+                let msg = match &hop_result.ip {
+                    Some(ip) => match &hop_result.hostname {
+                        Some(hostname) => format!("Found hop {}: {} ({})", ttl, ip, hostname),
+                        None => format!("Found hop {}: {}", ttl, ip),
+                    },
+                    None => format!("No response at hop {}", ttl),
+                };
+                pb.set_message(msg);
                 pb.inc(1);
             }
 
-            // If we reached the destination, we're done
+            // If we reached the destination, mark it but continue to collect all hops
             if let Some(ip) = &hop_result.ip {
                 if ip == &target_ip.to_string() {
-                    break;
+                    hop_result.is_destination = true;
+                    destination_reached = true;
                 }
+            }
+
+            // If we've reached the destination and collected a few more hops, we can stop
+            if destination_reached && ttl > 5 {
+                break;
             }
 
             // Wait between TTLs
@@ -344,9 +543,20 @@ impl Tracer {
             }
         }
 
-        // Finish progress
+        // Finish progress with summary
         if let Some(pb) = &progress {
-            pb.finish_and_clear();
+            let results = self.results.lock().await;
+            let hop_count = results.len();
+            let destination_reached = results.values().any(|hop| hop.is_destination);
+
+            let msg = if destination_reached {
+                format!("Completed trace to {} in {} hops", target_ip, hop_count)
+            } else {
+                format!("Trace to {} incomplete after {} hops", target_ip, hop_count)
+            };
+
+            pb.set_message(msg);
+            pb.finish();
         }
 
         Ok(())
@@ -356,16 +566,17 @@ impl Tracer {
     async fn trace_udp(&self, target_ip: IpAddr) -> Result<(), NtraceError> {
         // Both IPv4 and IPv6 are supported
 
-        // Create a progress indicator
+        // Create a more informative progress indicator
         let progress = if cfg!(not(test)) {
             use indicatif::{ProgressBar, ProgressStyle};
             let pb = ProgressBar::new(self.config.max_hops as u64);
             pb.set_style(
                 ProgressStyle::default_bar()
-                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops")
+                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops - {msg}")
                     .unwrap()
                     .progress_chars("█▓▒░ "),
             );
+            pb.set_message(format!("Tracing route to {} via TCP", target_ip));
             Some(pb)
         } else {
             None
@@ -483,8 +694,16 @@ impl Tracer {
                 results.insert(ttl, hop_result.clone());
             }
 
-            // Update progress
+            // Update progress with more information
             if let Some(pb) = &progress {
+                let msg = match &hop_result.ip {
+                    Some(ip) => match &hop_result.hostname {
+                        Some(hostname) => format!("Found hop {}: {} ({})", ttl, ip, hostname),
+                        None => format!("Found hop {}: {}", ttl, ip),
+                    },
+                    None => format!("No response at hop {}", ttl),
+                };
+                pb.set_message(msg);
                 pb.inc(1);
             }
 
@@ -499,28 +718,41 @@ impl Tracer {
             }
         }
 
-        // Finish progress
+        // Finish progress with summary
         if let Some(pb) = &progress {
-            pb.finish_and_clear();
+            let results = self.results.lock().await;
+            let hop_count = results.len();
+            let destination_reached = results.values().any(|hop| hop.is_destination);
+
+            let msg = if destination_reached {
+                format!("Completed trace to {} in {} hops", target_ip, hop_count)
+            } else {
+                format!("Trace to {} incomplete after {} hops", target_ip, hop_count)
+            };
+
+            pb.set_message(msg);
+            pb.finish();
         }
 
         Ok(())
     }
 
     /// Perform an ICMP traceroute
+    #[allow(dead_code)]
     async fn trace_icmp(&self, target_ip: IpAddr) -> Result<(), NtraceError> {
         // Both IPv4 and IPv6 are supported
 
-        // Create a progress indicator
+        // Create a more informative progress indicator
         let progress = if cfg!(not(test)) {
             use indicatif::{ProgressBar, ProgressStyle};
             let pb = ProgressBar::new(self.config.max_hops as u64);
             pb.set_style(
                 ProgressStyle::default_bar()
-                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops")
+                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops - {msg}")
                     .unwrap()
                     .progress_chars("█▓▒░ "),
             );
+            pb.set_message(format!("Tracing route to {} via TCP", target_ip));
             Some(pb)
         } else {
             None
@@ -681,8 +913,16 @@ impl Tracer {
                 results.insert(ttl, hop_result.clone());
             }
 
-            // Update progress
+            // Update progress with more information
             if let Some(pb) = &progress {
+                let msg = match &hop_result.ip {
+                    Some(ip) => match &hop_result.hostname {
+                        Some(hostname) => format!("Found hop {}: {} ({})", ttl, ip, hostname),
+                        None => format!("Found hop {}: {}", ttl, ip),
+                    },
+                    None => format!("No response at hop {}", ttl),
+                };
+                pb.set_message(msg);
                 pb.inc(1);
             }
 
@@ -697,28 +937,41 @@ impl Tracer {
             }
         }
 
-        // Finish progress
+        // Finish progress with summary
         if let Some(pb) = &progress {
-            pb.finish_and_clear();
+            let results = self.results.lock().await;
+            let hop_count = results.len();
+            let destination_reached = results.values().any(|hop| hop.is_destination);
+
+            let msg = if destination_reached {
+                format!("Completed trace to {} in {} hops", target_ip, hop_count)
+            } else {
+                format!("Trace to {} incomplete after {} hops", target_ip, hop_count)
+            };
+
+            pb.set_message(msg);
+            pb.finish();
         }
 
         Ok(())
     }
 
     /// Alternative ICMP traceroute implementation using a different approach
+    #[allow(dead_code)]
     async fn trace_icmp_alternative(&self, target_ip: IpAddr) -> Result<(), NtraceError> {
         // Both IPv4 and IPv6 are supported
 
-        // Create a progress indicator
+        // Create a more informative progress indicator
         let progress = if cfg!(not(test)) {
             use indicatif::{ProgressBar, ProgressStyle};
             let pb = ProgressBar::new(self.config.max_hops as u64);
             pb.set_style(
                 ProgressStyle::default_bar()
-                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops")
+                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops - {msg}")
                     .unwrap()
                     .progress_chars("█▓▒░ "),
             );
+            pb.set_message(format!("Tracing route to {} via TCP", target_ip));
             Some(pb)
         } else {
             None
@@ -871,8 +1124,16 @@ impl Tracer {
                 results.insert(ttl, hop_result.clone());
             }
 
-            // Update progress
+            // Update progress with more information
             if let Some(pb) = &progress {
+                let msg = match &hop_result.ip {
+                    Some(ip) => match &hop_result.hostname {
+                        Some(hostname) => format!("Found hop {}: {} ({})", ttl, ip, hostname),
+                        None => format!("Found hop {}: {}", ttl, ip),
+                    },
+                    None => format!("No response at hop {}", ttl),
+                };
+                pb.set_message(msg);
                 pb.inc(1);
             }
 
@@ -887,9 +1148,20 @@ impl Tracer {
             }
         }
 
-        // Finish progress
+        // Finish progress with summary
         if let Some(pb) = &progress {
-            pb.finish_and_clear();
+            let results = self.results.lock().await;
+            let hop_count = results.len();
+            let destination_reached = results.values().any(|hop| hop.is_destination);
+
+            let msg = if destination_reached {
+                format!("Completed trace to {} in {} hops", target_ip, hop_count)
+            } else {
+                format!("Trace to {} incomplete after {} hops", target_ip, hop_count)
+            };
+
+            pb.set_message(msg);
+            pb.finish();
         }
 
         Ok(())
@@ -908,16 +1180,17 @@ impl Tracer {
         // Both IPv4 and IPv6 are supported
         let is_ipv6 = matches!(target_ip, IpAddr::V6(_));
 
-        // Create a progress indicator
+        // Create a more informative progress indicator
         let progress = if cfg!(not(test)) {
             use indicatif::{ProgressBar, ProgressStyle};
             let pb = ProgressBar::new(self.config.max_hops as u64);
             pb.set_style(
                 ProgressStyle::default_bar()
-                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops")
+                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} hops - {msg}")
                     .unwrap()
                     .progress_chars("█▓▒░ "),
             );
+            pb.set_message(format!("Tracing route to {} via TCP", target_ip));
             Some(pb)
         } else {
             None
@@ -1247,8 +1520,16 @@ impl Tracer {
                 results.insert(ttl, hop_result.clone());
             }
 
-            // Update progress
+            // Update progress with more information
             if let Some(pb) = &progress {
+                let msg = match &hop_result.ip {
+                    Some(ip) => match &hop_result.hostname {
+                        Some(hostname) => format!("Found hop {}: {} ({})", ttl, ip, hostname),
+                        None => format!("Found hop {}: {}", ttl, ip),
+                    },
+                    None => format!("No response at hop {}", ttl),
+                };
+                pb.set_message(msg);
                 pb.inc(1);
             }
 
@@ -1263,9 +1544,20 @@ impl Tracer {
             }
         }
 
-        // Finish progress
+        // Finish progress with summary
         if let Some(pb) = &progress {
-            pb.finish_and_clear();
+            let results = self.results.lock().await;
+            let hop_count = results.len();
+            let destination_reached = results.values().any(|hop| hop.is_destination);
+
+            let msg = if destination_reached {
+                format!("Completed trace to {} in {} hops", target_ip, hop_count)
+            } else {
+                format!("Trace to {} incomplete after {} hops", target_ip, hop_count)
+            };
+
+            pb.set_message(msg);
+            pb.finish();
         }
 
         Ok(())
@@ -1312,6 +1604,17 @@ impl Tracer {
                     return Some(ip);
                 }
             }
+
+            // Windows-specific error handling for TTL exceeded
+            // WSAEHOSTUNREACH (10065) or WSAETIMEDOUT (10060)
+            if errno == Some(10065) || errno == Some(10060) {
+                // Try to extract from socket error
+                if let Some(ip_str) = extract_ip_from_last_error() {
+                    if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                        return Some(ip);
+                    }
+                }
+            }
         }
 
         #[cfg(target_os = "macos")]
@@ -1342,18 +1645,51 @@ fn extract_ip_from_string(s: &str) -> Option<String> {
     // Try to extract IPv4 address first (look for patterns like xxx.xxx.xxx.xxx)
     let ipv4_re = regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").ok()?;
     if let Some(m) = ipv4_re.find(s) {
-        return Some(m.as_str().to_string());
+        let ip_str = m.as_str().to_string();
+        // Validate that it's a proper IPv4 address
+        if ip_str.parse::<Ipv4Addr>().is_ok() {
+            return Some(ip_str);
+        }
     }
 
     // If no IPv4 address found, try to extract IPv6 address
     // This is a simplified pattern and might not catch all valid IPv6 formats
     let ipv6_re = regex::Regex::new(r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}|:(?:(?::[0-9a-fA-F]{1,4}){1,7}|:)").ok()?;
-    ipv6_re.find(s).map(|m| m.as_str().to_string())
+    if let Some(m) = ipv6_re.find(s) {
+        let ip_str = m.as_str().to_string();
+        // Validate that it's a proper IPv6 address
+        if ip_str.parse::<Ipv6Addr>().is_ok() {
+            return Some(ip_str);
+        }
+    }
+
+    None
 }
 
 /// Helper function to try to extract an IP from the last socket error
 fn extract_ip_from_last_error() -> Option<String> {
     // Get the last error message
     let error = std::io::Error::last_os_error().to_string();
+    debug!("Extracting IP from error: {}", error);
     extract_ip_from_string(&error)
+}
+
+/// Utility function to check if we have root/admin privileges
+fn has_root_privileges() -> bool {
+    #[cfg(target_family = "unix")]
+    {
+        unsafe { libc::geteuid() == 0 }
+    }
+
+    #[cfg(target_family = "windows")]
+    {
+        // On Windows, we can't easily check for admin privileges
+        // We'll just try the operation and see if it fails
+        true
+    }
+
+    #[cfg(not(any(target_family = "unix", target_family = "windows")))]
+    {
+        false
+    }
 }
