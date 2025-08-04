@@ -12,7 +12,13 @@ A fast network port scanner, protocol analyzer, and traceroute utility written i
   - Active probing
   - Well known port database
 - **Protocol Analysis**: Detects and analyzes protocols (HTTP, TLS, SSH, etc.)
-- **Traceroute**: Trace the network path to a target using various protocols (ICMP, TCP, UDP)
+- **Advanced Traceroute**: Trace the network path to a target using various protocols (ICMP, TCP, UDP) with:
+  - Parallel tracing for up to 5x faster results
+  - Path MTU discovery
+  - Path asymmetry detection
+  - Detailed latency statistics (min/max/avg/std-dev)
+  - Packet loss calculation
+  - Adaptive timing for better reliability
 - **Multiple Output Formats**: JSON and CSV output for integration with other tools
 - **Hostname Resolution**: Supports both IP addresses and hostnames as targets
 - **Flexible Port Selection**: Scan specific ports, ranges, or use predefined groups (common, well known, all)
@@ -70,16 +76,14 @@ ntrace -h
 
 #### Linux
 ```bash
-# How to manually set CAP_NET_RAW capability on the binary
-sudo setcap cap_net_raw+ep ~/.cargo/bin/ntrace
 ntrace trace google.com
 ```
 ```bash
 # Full port scan with service detection
 ./target/release/ntrace -H scanme.nmap.org -p well-known --service-detection
 
-# Fast traceroute with table output
-./target/release/ntrace trace cloudflare.com --table
+# Fast traceroute with table output and parallel processing
+./target/release/ntrace trace cloudflare.com --table --fast-mode
 ```
 
 #### Windows
@@ -87,8 +91,8 @@ ntrace trace google.com
 # Scan a local network device
 .\target\release\ntrace.exe -H 192.168.1.1 -p common
 
-# TCP traceroute
-.\target\release\ntrace.exe trace microsoft.com --tcp
+# TCP traceroute with parallel processing
+.\target\release\ntrace.exe trace microsoft.com --tcp --fast-mode
 ```
 
 #### macOS
@@ -112,13 +116,19 @@ Here are some more advanced examples that combine multiple features:
 # Security audit: scan all well-known ports with aggressive service detection
 ./target/release/ntrace -H target-server.com -p well-known --aggressive --service-detection
 
-# Network troubleshooting: compare TCP and ICMP traceroute results
-./target/release/ntrace trace problem-server.com --tcp --port 443 -o tcp-trace.json
+# Network troubleshooting: compare fast TCP and standard ICMP traceroute results
+./target/release/ntrace trace problem-server.com --tcp --fast-mode --port 443 -o tcp-trace.json
 ./target/release/ntrace trace problem-server.com -o icmp-trace.json
 
 # Performance testing: scan with different batch sizes and compare
 time ./target/release/ntrace -H performance-test.com -p 1-1000 --batch-size 50
 time ./target/release/ntrace -H performance-test.com -p 1-1000 --batch-size 200
+
+# Advanced traceroute with parallel processing for faster results
+./target/release/ntrace trace google.com --tcp --fast-mode
+
+# Comprehensive network path analysis
+./target/release/ntrace trace cloudflare.com --tcp --fast-mode --max-hops 20 --table
 ```
 
 ## Usage
@@ -162,6 +172,12 @@ ntrace trace google.com --table
 
 # Save trace results to a file
 ntrace trace google.com --output trace-results.json
+
+# Fast mode with parallel tracing (up to 5x faster)
+ntrace trace google.com --fast-mode
+
+# Combine options for optimal performance
+ntrace trace cloudflare.com --tcp --fast-mode --max-hops 20
 ```
 
 ### Advanced Options
@@ -192,6 +208,34 @@ ntrace -H 192.168.1.1 --aggressive
 # Ultra fast scanning mode
 ntrace -H 192.168.1.1 --fast
 ```
+
+### Advanced Traceroute Features
+
+ntrace offers several advanced traceroute capabilities that make it more powerful than traditional traceroute tools:
+
+```bash
+# Parallel traceroute for faster results (up to 5x faster)
+ntrace trace example.com --fast-mode
+
+# Combine parallel processing with TCP for reliable results
+ntrace trace example.com --tcp --fast-mode
+
+# Detailed statistics with table output
+ntrace trace example.com --tcp --fast-mode --table
+
+# Control the number of parallel requests
+ntrace trace example.com --fast-mode --parallel-requests 24
+
+# Customize timing parameters for better reliability
+ntrace trace example.com --send-time 5 --ttl-time 5 --timeout 800
+```
+
+These advanced features provide:
+
+- **Parallel Processing**: Trace multiple hops simultaneously for faster results
+- **Detailed Statistics**: Min/max/avg latency, standard deviation, packet loss
+- **Adaptive Timing**: Automatically adjust timing based on network conditions
+- **Flexible Protocol Support**: Choose between TCP, UDP, and ICMP based on your needs
 
 ### Port Selection Options
 
@@ -239,7 +283,13 @@ Summary: 2 open ports, 18 closed ports out of 20 scanned
 Trace the network path to Google using ICMP:
 
 ```bash
-sudo ~/.cargo/bin/ntrace trace google.com
+ntrace trace google.com
+```
+
+Or use the faster parallel traceroute with TCP:
+
+```bash
+ntrace trace google.com --tcp --fast-mode
 ```
 
 Output:
