@@ -269,7 +269,7 @@ fn print_trace_banner() {
     println!(
         "{} {} {}",
         "║".blue().bold(),
-        " Traceroute & Network Path Analyzer v0.1.3 "
+        " Traceroute & Network Protocol Analyzer v0.1.3 "
             .on_bright_blue()
             .white()
             .bold(),

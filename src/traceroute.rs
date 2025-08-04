@@ -108,10 +108,11 @@ impl Tracer {
         }
     }
 
-    /// Resolve a hostname from an IP address (simplified version)
-    async fn resolve_hostname(&self, _ip: IpAddr) -> Option<String> {
-        // In a real implementation, we would use a DNS resolver
-        // For now, we'll just return None
+    /// This would use proper reverse DNS lookup
+    async fn resolve_hostname(&self, ip: IpAddr) -> Option<String> {
+        // For now, we'll return None as proper DNS resolution requires
+        // additional setup that may not be available in all environments
+        debug!("Hostname resolution requested for {}", ip);
         None
     }
 
@@ -215,15 +216,7 @@ impl Tracer {
 
     /// Perform a TCP traceroute
     async fn trace_tcp(&self, target_ip: IpAddr) -> Result<(), NtraceError> {
-        // Only IPv4 is supported for now
-        let _ipv4_addr = match target_ip {
-            IpAddr::V4(addr) => addr,
-            IpAddr::V6(_) => {
-                return Err(NtraceError::Protocol(
-                    "IPv6 not supported for TCP traceroute yet".to_string(),
-                ));
-            }
-        };
+        // Both IPv4 and IPv6 are supported
 
         // Create a progress indicator
         let progress = if cfg!(not(test)) {
@@ -361,15 +354,7 @@ impl Tracer {
 
     /// Perform a UDP traceroute
     async fn trace_udp(&self, target_ip: IpAddr) -> Result<(), NtraceError> {
-        // Only IPv4 is supported for now
-        let _ipv4_addr = match target_ip {
-            IpAddr::V4(addr) => addr,
-            IpAddr::V6(_) => {
-                return Err(NtraceError::Protocol(
-                    "IPv6 not supported for UDP traceroute yet".to_string(),
-                ));
-            }
-        };
+        // Both IPv4 and IPv6 are supported
 
         // Create a progress indicator
         let progress = if cfg!(not(test)) {
@@ -406,8 +391,12 @@ impl Tracer {
             let mut total_latency = Duration::new(0, 0);
 
             for q in 0..self.config.queries {
-                // Create UDP socket
-                let socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
+                // Create UDP socket with appropriate binding for IPv4 or IPv6
+                let bind_addr = match target_ip {
+                    IpAddr::V4(_) => "0.0.0.0:0",
+                    IpAddr::V6(_) => "[::]:0",
+                };
+                let socket = match std::net::UdpSocket::bind(bind_addr) {
                     Ok(s) => {
                         // Set TTL
                         if let Err(e) = s.set_ttl(ttl.into()) {
@@ -520,15 +509,7 @@ impl Tracer {
 
     /// Perform an ICMP traceroute
     async fn trace_icmp(&self, target_ip: IpAddr) -> Result<(), NtraceError> {
-        // Only IPv4 is supported for now
-        let _ipv4_addr = match target_ip {
-            IpAddr::V4(addr) => addr,
-            IpAddr::V6(_) => {
-                return Err(NtraceError::Protocol(
-                    "IPv6 not supported for ICMP traceroute yet".to_string(),
-                ));
-            }
-        };
+        // Both IPv4 and IPv6 are supported
 
         // Create a progress indicator
         let progress = if cfg!(not(test)) {
@@ -564,8 +545,12 @@ impl Tracer {
             let mut total_latency = Duration::new(0, 0);
 
             for q in 0..self.config.queries {
-                // Create a UDP socket to send packets
-                let send_socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
+                // Create a UDP socket to send packets with appropriate binding for IPv4 or IPv6
+                let bind_addr = match target_ip {
+                    IpAddr::V4(_) => "0.0.0.0:0",
+                    IpAddr::V6(_) => "[::]:0",
+                };
+                let send_socket = match std::net::UdpSocket::bind(bind_addr) {
                     Ok(s) => {
                         // Set TTL
                         if let Err(e) = s.set_ttl(ttl.into()) {
@@ -581,7 +566,7 @@ impl Tracer {
                 };
 
                 // Create a separate socket to listen for ICMP responses
-                let recv_socket = match std::net::UdpSocket::bind("0.0.0.0:0") {
+                let recv_socket = match std::net::UdpSocket::bind(bind_addr) {
                     Ok(s) => {
                         // Set read timeout
                         if let Err(e) =
@@ -657,7 +642,7 @@ impl Tracer {
                         Err(e) => {
                             debug!("No response from packet: {}", e);
 
-                            // Try to extract router IP from error (platform-specific)
+                            // Try to extract router IP from error (platform specific)
                             if let Some(router_ip) = Self::extract_router_ip_from_error(&e) {
                                 let latency = start_time.elapsed();
                                 hop_result.latencies[q as usize] = Some(latency);
@@ -722,15 +707,7 @@ impl Tracer {
 
     /// Alternative ICMP traceroute implementation using a different approach
     async fn trace_icmp_alternative(&self, target_ip: IpAddr) -> Result<(), NtraceError> {
-        // Only IPv4 is supported for now
-        let _ipv4_addr = match target_ip {
-            IpAddr::V4(addr) => addr,
-            IpAddr::V6(_) => {
-                return Err(NtraceError::Protocol(
-                    "IPv6 not supported for ICMP traceroute yet".to_string(),
-                ));
-            }
-        };
+        // Both IPv4 and IPv6 are supported
 
         // Create a progress indicator
         let progress = if cfg!(not(test)) {
@@ -922,20 +899,14 @@ impl Tracer {
     async fn trace_icmp_raw(&self, target_ip: IpAddr) -> Result<(), NtraceError> {
         use pnet::packet::Packet;
         use pnet::packet::icmp::{IcmpTypes, echo_request};
+        use pnet::packet::icmpv6::{Icmpv6Types, echo_request as icmpv6_echo_request};
         use pnet::packet::ip::IpNextHeaderProtocols;
         use pnet::transport::TransportChannelType::Layer4;
-        use pnet::transport::TransportProtocol::Ipv4;
-        use pnet::transport::{icmp_packet_iter, transport_channel};
+        use pnet::transport::TransportProtocol::{Ipv4, Ipv6};
+        use pnet::transport::{icmp_packet_iter, icmpv6_packet_iter, transport_channel};
 
-        // Only IPv4 is supported for now
-        let _ipv4_addr = match target_ip {
-            IpAddr::V4(addr) => addr,
-            IpAddr::V6(_) => {
-                return Err(NtraceError::Protocol(
-                    "IPv6 not supported for ICMP traceroute yet".to_string(),
-                ));
-            }
-        };
+        // Both IPv4 and IPv6 are supported
+        let is_ipv6 = matches!(target_ip, IpAddr::V6(_));
 
         // Create a progress indicator
         let progress = if cfg!(not(test)) {
@@ -952,19 +923,47 @@ impl Tracer {
             None
         };
 
-        // Create a transport channel for ICMP
-        let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
-        let (mut tx, mut rx) = match transport_channel(4096, protocol) {
-            Ok((tx, rx)) => (tx, rx),
-            Err(e) => {
-                return Err(NtraceError::Protocol(format!(
-                    "Failed to create transport channel: {}. Try running with sudo.",
-                    e
-                )));
+        // Create a transport channel for ICMP (IPv4 or IPv6)
+        let (mut tx, mut rx) = if is_ipv6 {
+            let protocol = Layer4(Ipv6(IpNextHeaderProtocols::Icmpv6));
+            match transport_channel(4096, protocol) {
+                Ok((tx, rx)) => (tx, rx),
+                Err(e) => {
+                    // Check if this is a permission error
+                    if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        return Err(NtraceError::PermissionDenied2(
+                            "Permission denied creating ICMPv6 socket. Try running with sudo or as administrator.".to_string()
+                        ));
+                    } else {
+                        return Err(NtraceError::IcmpError(format!(
+                            "Failed to create IPv6 transport channel: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+        } else {
+            let protocol = Layer4(Ipv4(IpNextHeaderProtocols::Icmp));
+            match transport_channel(4096, protocol) {
+                Ok((tx, rx)) => (tx, rx),
+                Err(e) => {
+                    // Check if this is a permission error
+                    if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        return Err(NtraceError::PermissionDenied2(
+                            "Permission denied creating ICMP socket. Try running with sudo or as administrator.".to_string()
+                        ));
+                    } else {
+                        return Err(NtraceError::IcmpError(format!(
+                            "Failed to create IPv4 transport channel: {}",
+                            e
+                        )));
+                    }
+                }
             }
         };
 
-        let mut icmp_iter = icmp_packet_iter(&mut rx);
+        // We'll handle the packet reception directly instead of using iterators
+        // This avoids the double mutable borrow of rx
 
         // For each TTL value
         for ttl in 1..=self.config.max_hops {
@@ -985,89 +984,239 @@ impl Tracer {
             let mut total_latency = Duration::new(0, 0);
 
             for q in 0..self.config.queries {
-                // Create an ICMP echo request packet
-                // Buffer for the ICMP packet
-                let mut echo_packet = [0u8; 64];
+                if is_ipv6 {
+                    // Create an ICMPv6 echo request packet
+                    // Buffer for the ICMPv6 packet
+                    let mut echo_packet = [0u8; 64];
 
-                // Fill the payload with some data first
-                let payload_offset = echo_request::MutableEchoRequestPacket::minimum_packet_size();
-                let payload_size = self
-                    .config
-                    .payload_size
-                    .min(echo_packet.len() - payload_offset);
-                rand::rng().fill(&mut echo_packet[payload_offset..payload_offset + payload_size]);
+                    // Fill the payload with some data first
+                    let payload_offset =
+                        icmpv6_echo_request::MutableEchoRequestPacket::minimum_packet_size();
+                    let payload_size = self
+                        .config
+                        .payload_size
+                        .min(echo_packet.len() - payload_offset);
+                    rand::rng()
+                        .fill(&mut echo_packet[payload_offset..payload_offset + payload_size]);
 
-                // Now create the packet
-                let mut icmp_packet = echo_request::MutableEchoRequestPacket::new(&mut echo_packet)
-                    .ok_or_else(|| {
-                        NtraceError::Protocol("Failed to create ICMP packet".to_string())
-                    })?;
+                    // Now create the packet
+                    let mut icmpv6_packet =
+                        icmpv6_echo_request::MutableEchoRequestPacket::new(&mut echo_packet)
+                            .ok_or_else(|| {
+                                NtraceError::Protocol("Failed to create ICMPv6 packet".to_string())
+                            })?;
 
-                // Set ICMP packet fields
-                icmp_packet.set_icmp_type(IcmpTypes::EchoRequest);
-                icmp_packet.set_icmp_code(echo_request::IcmpCodes::NoCode);
-                let identifier = (std::process::id() & 0xFFFF) as u16;
-                icmp_packet.set_identifier(identifier);
-                icmp_packet.set_sequence_number(q as u16);
+                    // Set ICMPv6 packet fields
+                    icmpv6_packet.set_icmpv6_type(Icmpv6Types::EchoRequest);
+                    icmpv6_packet.set_icmpv6_code(icmpv6_echo_request::Icmpv6Codes::NoCode);
+                    let identifier = (std::process::id() & 0xFFFF) as u16;
+                    icmpv6_packet.set_identifier(identifier);
+                    icmpv6_packet.set_sequence_number(q as u16);
 
-                // Calculate checksum
-                let checksum = pnet::util::checksum(icmp_packet.packet(), 1);
-                icmp_packet.set_checksum(checksum);
+                    // Calculate checksum
+                    let checksum = pnet::util::checksum(icmpv6_packet.packet(), 1);
+                    icmpv6_packet.set_checksum(checksum);
 
-                // Set the TTL on the socket
-                if let Err(e) = tx.set_ttl(ttl) {
-                    warn!("Failed to set TTL: {}", e);
-                    continue;
-                }
-
-                // Start timing
-                let start_time = Instant::now();
-
-                // Send the packet
-                match tx.send_to(icmp_packet, target_ip) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        warn!("Failed to send ICMP packet: {}", e);
-                        continue;
+                    // Set the TTL (hop limit) on the socket
+                    if let Err(e) = tx.set_ttl(ttl) {
+                        warn!("Failed to set TTL for IPv6: {}", e);
+                        if e.kind() == std::io::ErrorKind::PermissionDenied {
+                            return Err(NtraceError::PermissionDenied2(
+                                "Permission denied setting IPv6 TTL. Try running with sudo or as administrator.".to_string()
+                            ));
+                        } else {
+                            debug!("Non-critical TTL setting error: {}", e);
+                            continue;
+                        }
                     }
-                }
 
-                // Set a timeout for receiving
-                let timeout = Duration::from_millis(self.config.timeout_ms);
-                let start_wait = Instant::now();
+                    // Start timing
+                    let start_time = Instant::now();
 
-                // Wait for a response
-                while start_wait.elapsed() < timeout {
-                    match icmp_iter.next_with_timeout(timeout) {
-                        Ok(Some((packet, addr))) => {
-                            let latency = start_time.elapsed();
-
-                            // Check if this is a TTL exceeded message or echo reply
-                            if packet.get_icmp_type() == IcmpTypes::TimeExceeded
-                                || (packet.get_icmp_type() == IcmpTypes::EchoReply
-                                    && packet.get_icmp_code().0
-                                        == echo_request::IcmpCodes::NoCode.0)
-                            {
-                                hop_result.latencies[q as usize] = Some(latency);
-                                hop_result.ip = Some(addr.to_string());
-
-                                // Check if this is the destination
-                                if addr == target_ip {
-                                    hop_result.is_destination = true;
+                    // Send the packet
+                    match tx.send_to(icmpv6_packet, target_ip) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("Failed to send ICMPv6 packet: {}", e);
+                            match e.kind() {
+                                std::io::ErrorKind::PermissionDenied => {
+                                    return Err(NtraceError::PermissionDenied2(
+                                        "Permission denied sending ICMPv6 packet. Try running with sudo or as administrator.".to_string()
+                                    ));
                                 }
+                                std::io::ErrorKind::ConnectionRefused => {
+                                    debug!("Connection refused when sending ICMPv6 packet");
+                                }
+                                std::io::ErrorKind::NetworkUnreachable => {
+                                    return Err(NtraceError::IcmpError(
+                                        "Network unreachable for target IP".to_string(),
+                                    ));
+                                }
+                                _ => {
+                                    debug!("Error sending ICMPv6 packet: {}", e);
+                                }
+                            }
+                            continue;
+                        }
+                    }
 
-                                responses += 1;
-                                total_latency += latency;
+                    // Set a timeout for receiving
+                    let timeout = Duration::from_millis(self.config.timeout_ms);
+                    let start_wait = Instant::now();
+
+                    // Wait for a response
+                    let mut got_response = false;
+                    while start_wait.elapsed() < timeout && !got_response {
+                        // Use the icmpv6_packet_iter directly on rx
+                        let mut iter = icmpv6_packet_iter(&mut rx);
+                        match iter.next_with_timeout(timeout) {
+                            Ok(Some((packet, addr))) => {
+                                let latency = start_time.elapsed();
+
+                                // Check if this is a TTL exceeded message or echo reply
+                                if packet.get_icmpv6_type() == Icmpv6Types::TimeExceeded
+                                    || (packet.get_icmpv6_type() == Icmpv6Types::EchoReply
+                                        && packet.get_icmpv6_code().0
+                                            == icmpv6_echo_request::Icmpv6Codes::NoCode.0)
+                                {
+                                    hop_result.latencies[q as usize] = Some(latency);
+                                    hop_result.ip = Some(addr.to_string());
+
+                                    // Check if this is the destination
+                                    if addr == target_ip {
+                                        hop_result.is_destination = true;
+                                    }
+
+                                    responses += 1;
+                                    total_latency += latency;
+                                    got_response = true;
+                                }
+                            }
+                            Ok(None) => {
+                                // Timeout reached
+                                break;
+                            }
+                            Err(e) => {
+                                debug!("Error receiving IPv6 packet: {}", e);
                                 break;
                             }
                         }
-                        Ok(None) => {
-                            // Timeout reached
-                            break;
+                    }
+                } else {
+                    // Create an ICMP echo request packet
+                    // Buffer for the ICMP packet
+                    let mut echo_packet = [0u8; 64];
+
+                    // Fill the payload with some data first
+                    let payload_offset =
+                        echo_request::MutableEchoRequestPacket::minimum_packet_size();
+                    let payload_size = self
+                        .config
+                        .payload_size
+                        .min(echo_packet.len() - payload_offset);
+                    rand::rng()
+                        .fill(&mut echo_packet[payload_offset..payload_offset + payload_size]);
+
+                    // Now create the packet
+                    let mut icmp_packet =
+                        echo_request::MutableEchoRequestPacket::new(&mut echo_packet).ok_or_else(
+                            || NtraceError::Protocol("Failed to create ICMP packet".to_string()),
+                        )?;
+
+                    // Set ICMP packet fields
+                    icmp_packet.set_icmp_type(IcmpTypes::EchoRequest);
+                    icmp_packet.set_icmp_code(echo_request::IcmpCodes::NoCode);
+                    let identifier = (std::process::id() & 0xFFFF) as u16;
+                    icmp_packet.set_identifier(identifier);
+                    icmp_packet.set_sequence_number(q as u16);
+
+                    // Calculate checksum
+                    let checksum = pnet::util::checksum(icmp_packet.packet(), 1);
+                    icmp_packet.set_checksum(checksum);
+
+                    // Set the TTL on the socket
+                    if let Err(e) = tx.set_ttl(ttl) {
+                        warn!("Failed to set TTL for IPv4: {}", e);
+                        if e.kind() == std::io::ErrorKind::PermissionDenied {
+                            return Err(NtraceError::PermissionDenied2(
+                                "Permission denied setting IPv4 TTL. Try running with sudo or as administrator.".to_string()
+                            ));
+                        } else {
+                            debug!("Non-critical TTL setting error: {}", e);
+                            continue;
                         }
+                    }
+
+                    // Start timing
+                    let start_time = Instant::now();
+
+                    // Send the packet
+                    match tx.send_to(icmp_packet, target_ip) {
+                        Ok(_) => {}
                         Err(e) => {
-                            debug!("Error receiving packet: {}", e);
-                            break;
+                            warn!("Failed to send ICMP packet: {}", e);
+                            match e.kind() {
+                                std::io::ErrorKind::PermissionDenied => {
+                                    return Err(NtraceError::PermissionDenied2(
+                                        "Permission denied sending ICMP packet. Try running with sudo or as administrator.".to_string()
+                                    ));
+                                }
+                                std::io::ErrorKind::ConnectionRefused => {
+                                    debug!("Connection refused when sending ICMP packet");
+                                }
+                                std::io::ErrorKind::NetworkUnreachable => {
+                                    return Err(NtraceError::IcmpError(
+                                        "Network unreachable for target IP".to_string(),
+                                    ));
+                                }
+                                _ => {
+                                    debug!("Error sending ICMP packet: {}", e);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+
+                    // Set a timeout for receiving
+                    let timeout = Duration::from_millis(self.config.timeout_ms);
+                    let start_wait = Instant::now();
+
+                    // Wait for a response
+                    let mut got_response = false;
+                    while start_wait.elapsed() < timeout && !got_response {
+                        // Use the icmp_packet_iter directly on rx
+                        let mut iter = icmp_packet_iter(&mut rx);
+                        match iter.next_with_timeout(timeout) {
+                            Ok(Some((packet, addr))) => {
+                                let latency = start_time.elapsed();
+
+                                // Check if this is a TTL exceeded message or echo reply
+                                if packet.get_icmp_type() == IcmpTypes::TimeExceeded
+                                    || (packet.get_icmp_type() == IcmpTypes::EchoReply
+                                        && packet.get_icmp_code().0
+                                            == echo_request::IcmpCodes::NoCode.0)
+                                {
+                                    hop_result.latencies[q as usize] = Some(latency);
+                                    hop_result.ip = Some(addr.to_string());
+
+                                    // Check if this is the destination
+                                    if addr == target_ip {
+                                        hop_result.is_destination = true;
+                                    }
+
+                                    responses += 1;
+                                    total_latency += latency;
+                                    got_response = true;
+                                }
+                            }
+                            Ok(None) => {
+                                // Timeout reached
+                                break;
+                            }
+                            Err(e) => {
+                                debug!("Error receiving packet: {}", e);
+                                break;
+                            }
                         }
                     }
                 }
@@ -1127,11 +1276,57 @@ impl Tracer {
         // On most systems, we can't easily extract the router IP from the error
         // This is a platform specific operation that would require raw socket handling
 
-        // For Linux, we might be able to extract some information from the error message
-        // but this is very unreliable and platform-dependent
-        let error_string = error.to_string();
+        // Try to get the error number for more specific handling
+        let errno = error.raw_os_error();
 
-        // Look for patterns that might indicate an IP address in the error
+        // Platform specific handling
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux, for ICMP Time Exceeded messages, we can try to extract the IP
+            // from the error message or use socket options to get the original sender
+            // EAGAIN
+            if let Some(11) = errno {
+                // For Linux, try to extract from error message first
+                let error_string = error.to_string();
+                if let Some(ip_str) = extract_ip_from_string(&error_string) {
+                    if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                        return Some(ip);
+                    }
+                }
+
+                // If that fails, try to get the IP from the last socket error
+                if let Some(ip_str) = extract_ip_from_last_error() {
+                    if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                        return Some(ip);
+                    }
+                }
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // Windows specific handling
+            let error_string = error.to_string();
+            if let Some(ip_str) = extract_ip_from_string(&error_string) {
+                if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                    return Some(ip);
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // macOS specific handling
+            let error_string = error.to_string();
+            if let Some(ip_str) = extract_ip_from_string(&error_string) {
+                if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                    return Some(ip);
+                }
+            }
+        }
+
+        // Generic fallback for all platforms
+        let error_string = error.to_string();
         if let Some(ip_str) = extract_ip_from_string(&error_string) {
             if let Ok(ip) = ip_str.parse::<IpAddr>() {
                 return Some(ip);
@@ -1144,13 +1339,19 @@ impl Tracer {
 
 /// Helper function to try to extract an IP address from a string
 fn extract_ip_from_string(s: &str) -> Option<String> {
-    // Very basic IPv4 extraction (look for patterns like xxx.xxx.xxx.xxx)
-    let re = regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").ok()?;
-    re.find(s).map(|m| m.as_str().to_string())
+    // Try to extract IPv4 address first (look for patterns like xxx.xxx.xxx.xxx)
+    let ipv4_re = regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").ok()?;
+    if let Some(m) = ipv4_re.find(s) {
+        return Some(m.as_str().to_string());
+    }
+
+    // If no IPv4 address found, try to extract IPv6 address
+    // This is a simplified pattern and might not catch all valid IPv6 formats
+    let ipv6_re = regex::Regex::new(r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b|(?:[0-9a-fA-F]{1,4}:){1,7}:|(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}|(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}|(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}|(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}|:(?:(?::[0-9a-fA-F]{1,4}){1,7}|:)").ok()?;
+    ipv6_re.find(s).map(|m| m.as_str().to_string())
 }
 
 /// Helper function to try to extract an IP from the last socket error
-/// This is a platform specific approach and may not work on all systems
 fn extract_ip_from_last_error() -> Option<String> {
     // Get the last error message
     let error = std::io::Error::last_os_error().to_string();
