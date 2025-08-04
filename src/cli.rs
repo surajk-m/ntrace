@@ -231,6 +231,10 @@ pub enum Command {
         /// Output file path (.json or .txt)
         #[arg(long = "output", short = 'o')]
         output: Option<String>,
+
+        /// Use fast mode with parallel tracing
+        #[arg(long = "fast-mode", short = 'f')]
+        fast_mode: bool,
     },
 }
 
@@ -323,6 +327,7 @@ impl Cli {
             ttl_time_ms,
             timeout_ms,
             payload_size,
+            fast_mode,
             ..
         }) = &self.command
         {
@@ -369,6 +374,7 @@ impl Cli {
                 protocol,
                 port: *port,
                 max_hops: *max_hops,
+                min_ttl: 1,
                 queries: *queries,
                 timeout_ms: *timeout_ms,
                 resolve_hostnames,
@@ -376,6 +382,18 @@ impl Cli {
                 send_time_ms: *send_time_ms,
                 ttl_time_ms: *ttl_time_ms,
                 payload_size: *payload_size,
+                fast_mode: *fast_mode,
+                discover_mtu: false,
+                detect_asymmetry: false,
+                lookup_asn: false,
+                lookup_geo: false,
+                detect_mpls: false,
+                source_ip: None,
+                source_port: None,
+                tos: None,
+                interface: None,
+                first_hop_timeout_ms: Some(1200),
+                adaptive_timing: true,
             })
         } else {
             Err(anyhow::anyhow!("Not a trace command"))

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2025-08-10
+
+### What's Changed
+- Major improvements to traceroute functionality:
+  - Add parallel traceroute for faster results (up to 5x faster)
+  - Add path MTU discovery
+  - Add path asymmetry detection
+  - Add detailed latency statistics (min, max, average, standard deviation)
+  - Add packet loss calculation
+  - Add support for custom source IP and port
+  - Add support for ToS/DSCP values
+  - Add adaptive timing for more reliable results
+  - Add MPLS tunnel detection
+  - Add support for starting from specific TTL (min_ttl)
+  - Add support for interface selection
+
 ## [0.1.5] - 2025-08-05
 
 ### What's Changed
