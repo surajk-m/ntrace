@@ -960,6 +960,18 @@ impl Tracer {
 
                         match source_ip {
                             IpAddr::V4(ipv4) => {
+                                #[cfg(any(target_os = "freebsd", target_os = "macos"))]
+                                let addr = libc::sockaddr_in {
+                                    sin_len: std::mem::size_of::<libc::sockaddr_in>() as u8,
+                                    sin_family: libc::AF_INET as u8,
+                                    sin_port: 0,
+                                    sin_addr: libc::in_addr {
+                                        s_addr: u32::from_ne_bytes(ipv4.octets()),
+                                    },
+                                    sin_zero: [0; 8],
+                                };
+
+                                #[cfg(target_os = "linux")]
                                 let addr = libc::sockaddr_in {
                                     sin_family: libc::AF_INET as u16,
                                     // Let the OS choose
@@ -985,9 +997,44 @@ impl Tracer {
                                     );
                                 }
                             }
-                            IpAddr::V6(_ipv6) => {
-                                // IPv6 binding would be implemented here
-                                warn!("IPv6 source binding not implemented yet");
+                            IpAddr::V6(ipv6) => {
+                                #[cfg(any(target_os = "freebsd", target_os = "macos"))]
+                                let addr = libc::sockaddr_in6 {
+                                    sin6_len: std::mem::size_of::<libc::sockaddr_in6>() as u8,
+                                    sin6_family: libc::AF_INET6 as u8,
+                                    sin6_port: 0,
+                                    sin6_flowinfo: 0,
+                                    sin6_addr: libc::in6_addr {
+                                        s6_addr: ipv6.octets(),
+                                    },
+                                    sin6_scope_id: 0,
+                                };
+
+                                #[cfg(target_os = "linux")]
+                                let addr = libc::sockaddr_in6 {
+                                    sin6_family: libc::AF_INET6 as u16,
+                                    sin6_port: 0,
+                                    sin6_flowinfo: 0,
+                                    sin6_addr: libc::in6_addr {
+                                        s6_addr: ipv6.octets(),
+                                    },
+                                    sin6_scope_id: 0,
+                                };
+
+                                let res = unsafe {
+                                    libc::bind(
+                                        fd,
+                                        &addr as *const _ as *const libc::sockaddr,
+                                        std::mem::size_of::<libc::sockaddr_in6>() as u32,
+                                    )
+                                };
+
+                                if res != 0 {
+                                    warn!(
+                                        "Failed to bind to source IPv6: {}",
+                                        std::io::Error::last_os_error()
+                                    );
+                                }
                             }
                         }
                     }
@@ -2353,7 +2400,7 @@ impl Tracer {
         // This is a platform specific operation that would require raw socket handling
 
         // Try to get the error number for more specific handling
-        let errno = error.raw_os_error();
+        let _errno = error.raw_os_error();
 
         // Platform specific handling
         #[cfg(target_os = "linux")]
@@ -2361,7 +2408,7 @@ impl Tracer {
             // On Linux, for ICMP Time Exceeded messages, we can try to extract the IP
             // from the error message or use socket options to get the original sender
             // EAGAIN
-            if let Some(11) = errno {
+            if let Some(11) = _errno {
                 // For Linux, try to extract from error message first
                 let error_string = error.to_string();
                 if let Some(ip_str) = extract_ip_from_string(&error_string) {
