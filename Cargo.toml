@@ -1,6 +1,6 @@
 [package]
 name = "ntrace"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2024"
 authors = ["Suraj <suraj410401@gmail.com>"]
 description = "A fast and secure network port scanner and protocol analyzer"
