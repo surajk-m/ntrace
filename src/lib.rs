@@ -61,6 +61,7 @@
 pub mod capability;
 pub mod cli;
 pub mod error;
+pub mod multicore;
 pub mod output;
 pub mod protocol;
 pub mod scanner;
@@ -71,6 +72,11 @@ pub use capability::{ensure_cap_net_raw, has_cap_net_raw, try_set_cap_net_raw};
 /// Command line interface for ntrace
 pub use cli::Cli;
 pub use error::NtraceError;
+/// Multi-core infrastructure types
+pub use multicore::{
+    GlobalRateLimiter, MultiCoreConfig, ThreadPoolManager, ThreadStats, WorkDistributionStrategy,
+    WorkDistributor, WorkItem, WorkerThread,
+};
 pub use output::ScanResult;
 /// Protocol types and analyzer
 pub use protocol::{Protocol, ProtocolAnalyzer, Target};
